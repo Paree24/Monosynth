@@ -21,3 +21,9 @@ Thumbs.db
 # Local test / packaging scratch (regenerable)
 *.zip
 *.tar.gz
+
+# Local reference material (never published)
+/Monosynth Architecture.jpg
+/Monosynth_ Retro Analog Synthesizer Interface.png
+/Monosynth_Plugin_Architecture.md
+/LESSONS.md
