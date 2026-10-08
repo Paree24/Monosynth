@@ -86,10 +86,11 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
-      - name: Configure (macOS)
+      - name: Configure (macOS, ARM64 only)
         if: runner.os == 'macOS'
         run: >
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES=arm64
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Configure (Windows)

@@ -26,10 +26,13 @@ static float peakAbs(const juce::AudioBuffer<float>& b)
             p = juce::jmax(p, std::abs(b.getSample(ch, i)));
     return p;
 }
+// NOTE: plain ternary on purpose — juce::jmax<size_t> resolves to NEON SIMD
+// overloads on ARM macOS and fails to compile.
 static float rmsOf(const std::vector<float>& v)
 {
     double s = 0.0; for (auto x : v) s += (double) x * x;
-    return (float) std::sqrt(s / (double) juce::jmax<size_t>(1, v.size()));
+    size_t n = v.empty() ? 1 : v.size();
+    return (float) std::sqrt(s / (double) n);
 }
 
 int main(int, char**)

@@ -92,8 +92,12 @@ without ever touching the install bundle.
    xcode-select --install
    brew install cmake ninja git
    ```
-2. Same configure + build as Linux. For a universal (Intel + Apple Silicon)
-   binary, add `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` to the configure step.
+2. Same configure + build as Linux, ARM64 only (Apple Silicon runners build
+   arm64 by default; Intel builds are out of scope for this project):
+   ```sh
+   cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+   cmake --build build --config Release
+   ```
 3. Run `./build/MonoHarness_artefacts/Release/MonoHarness` — expect `ALL TESTS PASSED`.
 4. Install: copy `Monosynth.vst3` to `~/Library/Audio/Plug-Ins/VST3/`. These are
    unsigned personal builds: if macOS refuses to load them, ad-hoc sign with
