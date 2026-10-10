@@ -29,8 +29,8 @@ juce_add_binary_data(MonoAssets
 )
 
 juce_add_plugin(Monosynth
-  COMPANY_NAME "Paree"
-  BUNDLE_ID "com.paree.monosynth"
+  COMPANY_NAME "monosynth.monosynth"
+  BUNDLE_ID "monosynth.monosynth"
   PLUGIN_MANUFACTURER_CODE Pare
   PLUGIN_CODE Mono
   FORMATS VST3 Standalone
