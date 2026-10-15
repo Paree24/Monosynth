@@ -93,11 +93,10 @@ private:
                                   int x, int y, int w, int h);
     void addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 36);
     void addOctButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 34);
-    void openSaveDialog();
     MonoProcessor& proc;
     MonoLNF lnf;
     juce::TextButton prevBtn { "<" }, nextBtn { ">" }, nameBtn { "Init Patch" };
-    juce::TextButton saveBtn { "S" }, folderBtn { "F" }, initBtn { "INIT" };
+    juce::TextButton saveBtn { "SAVE" }, initBtn { "INIT" };
     juce::Slider* volTop = nullptr;
     std::vector<std::unique_ptr<juce::GroupComponent>> groups;
     std::vector<std::unique_ptr<juce::Slider>> knobs;
@@ -110,7 +109,6 @@ private:
     std::vector<std::unique_ptr<AmountKnob>> amtKnobs;
     std::vector<std::unique_ptr<juce::Label>> amtLabels;
     std::unique_ptr<PresetBrowser> browser;
-    juce::String customName; // user-preset display name (empty = follow processor)
     juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> sAtt;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ComboBoxAttachment> cAtt;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> bAtt;

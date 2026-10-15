@@ -208,15 +208,21 @@ public:
         int maxLen = (int)(sr * 2.0) + 16;
         bufL.assign(maxLen, 0.0f); bufR.assign(maxLen, 0.0f);
         len = maxLen; pos = 0; lpL = lpR = 0.0f;
+        smSamples = -1.0f;
     }
     void process(float* L, float* R, int n, float timeMs, float fb, float mix)
     {
         if (mix <= 0.001f) return;
         timeMs = juce::jlimit(20.0f, 1500.0f, timeMs);
         float samples = (float)(timeMs * sampleRate / 1000.0);
+        if (smSamples < 0.0f) smSamples = samples;
+        // glide the read head (~60 ms): time-knob moves pitch-bend the echoes
+        // like tape instead of jumping the tap and clicking
+        float k = 1.0f - std::exp(-1.0f / (0.060f * (float)sampleRate));
         for (int i = 0; i < n; ++i)
         {
-            float rp = (float)pos - samples;
+            smSamples += (samples - smSamples) * k;
+            float rp = (float)pos - smSamples;
             while (rp < 0) rp += len;
             int i0 = (int)rp; float frac = rp - i0; int i1 = (i0 + 1) % len;
             float dL = bufL[(size_t)i0] * (1 - frac) + bufL[(size_t)i1] * frac;
@@ -229,9 +235,14 @@ public:
             pos = (pos + 1) % len;
         }
     }
-    void clear() { std::fill(bufL.begin(), bufL.end(), 0.0f); std::fill(bufR.begin(), bufR.end(), 0.0f); }
+    void clear()
+    {
+        std::fill(bufL.begin(), bufL.end(), 0.0f); std::fill(bufR.begin(), bufR.end(), 0.0f);
+        lpL = lpR = 0.0f;
+    }
 private:
     double sampleRate = 44100.0; std::vector<float> bufL, bufR; int len = 1024, pos = 0; float lpL = 0, lpR = 0;
+    float smSamples = -1.0f;
 };
 
 } // namespace MonoFX

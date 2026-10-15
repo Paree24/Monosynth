@@ -204,29 +204,33 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     setLookAndFeel(&lnf);
 
     addAndMakeVisible(prevBtn); addAndMakeVisible(nextBtn);
-    addAndMakeVisible(nameBtn); addAndMakeVisible(saveBtn); addAndMakeVisible(folderBtn);
+    addAndMakeVisible(nameBtn); addAndMakeVisible(saveBtn);
     addAndMakeVisible(initBtn);
-    for (auto* b : { &prevBtn, &nextBtn, &nameBtn, &saveBtn, &folderBtn, &initBtn })
+    for (auto* b : { &prevBtn, &nextBtn, &nameBtn, &saveBtn, &initBtn })
     {
         b->setLookAndFeel(&lnf);
         b->setColour(juce::TextButton::buttonColourId, MonoColors::raised);
         b->setColour(juce::TextButton::textColourOnId, MonoColors::text);
         b->setColour(juce::TextButton::textColourOffId, MonoColors::text);
     }
-    prevBtn.onClick = [&] {
-        int n = juce::jmax(1, proc.getNumPrograms());
-        customName = "";
-        proc.loadPreset((proc.getCurrentProgram() + n - 1) % n); refreshPresetName();
+    // step through the factory list in file order (from a user/init sound,
+    // > starts at the first slot and < at the last)
+    auto stepPreset = [this](int dir) {
+        const auto& all = getFactoryPresets();
+        if (all.empty()) return;
+        int n = (int)all.size(), pos = -1;
+        for (int i = 0; i < n; ++i)
+            if (all[(size_t)i].index == proc.getFactorySlot()) { pos = i; break; }
+        int npos = pos < 0 ? (dir > 0 ? 0 : n - 1) : (pos + dir + n) % n;
+        proc.loadPreset(all[(size_t)npos].index);
+        refreshPresetName();
     };
-    nextBtn.onClick = [&] {
-        int n = juce::jmax(1, proc.getNumPrograms());
-        customName = "";
-        proc.loadPreset((proc.getCurrentProgram() + 1) % n); refreshPresetName();
-    };
+    prevBtn.onClick = [stepPreset] { stepPreset(-1); };
+    nextBtn.onClick = [stepPreset] { stepPreset(+1); };
     nameBtn.onClick = [&] { if (browser != nullptr) browser->setVisible(true); };
-    saveBtn.onClick = [&] { openSaveDialog(); };
-    folderBtn.onClick = [&] { if (browser != nullptr) browser->setVisible(true); };
-    initBtn.onClick = [&] { customName = ""; proc.loadInit(); refreshPresetName(); };
+    saveBtn.onClick = [&] { if (browser != nullptr) browser->openForSave(); };
+    initBtn.onClick = [&] { proc.loadInit(); refreshPresetName(); };
+    nameBtn.setTooltip("Browse presets");
     refreshPresetName();
 
     volTop = addKnob(P::VOLUME, "", this, 0, 0, 40, 40);
@@ -235,40 +239,42 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     // ---- Panel 1 row 1 ----
     auto* gVco1 = addGroup("VCO 1", 8, 64, 224, 252, MonoColors::blue);
     addCaption("WAVEFORM", gVco1, 10, 30, 204);
-    addWaveButtons(P::VCO1_WAVE, gVco1, 12, 46);
+    addWaveButtons(P::VCO1_WAVE, gVco1, 18, 46);
     addKnob(P::VCO1_PITCH, "PITCH", gVco1, 6, 92);
     addKnob(P::VCO1_TUNE, "TUNE", gVco1, 80, 92);
     addKnob(P::VCO1_PW, "PW", gVco1, 154, 92);
     addCaption("OCTAVE", gVco1, 10, 176, 204);
-    addOctButtons(P::VCO1_OCT, gVco1, 12, 192);
+    addOctButtons(P::VCO1_OCT, gVco1, 23, 192);
 
     auto* gVco2 = addGroup("VCO 2", 240, 64, 224, 252, MonoColors::blue);
     addCaption("WAVEFORM", gVco2, 10, 30, 204);
-    addWaveButtons(P::VCO2_WAVE, gVco2, 12, 46);
+    addWaveButtons(P::VCO2_WAVE, gVco2, 18, 46);
     addKnob(P::VCO2_PITCH, "PITCH", gVco2, 6, 92);
     addKnob(P::VCO2_TUNE, "TUNE", gVco2, 80, 92);
     addKnob(P::VCO2_PW, "PW", gVco2, 154, 92);
     addCaption("OCTAVE", gVco2, 10, 176, 204);
-    addOctButtons(P::VCO2_OCT, gVco2, 12, 192);
+    addOctButtons(P::VCO2_OCT, gVco2, 23, 192);
 
     auto* gMix = addGroup("MIXER", 472, 64, 140, 252, MonoColors::blue);
-    addKnob(P::MIX_VCO1, "VCO 1", gMix, 38, 26, 64, 44);
-    addKnob(P::MIX_VCO2, "VCO 2", gMix, 38, 70, 64, 44);
-    addKnob(P::MIX_RING, "RING", gMix, 38, 114, 64, 44);
-    addKnob(P::MIX_NOISE, "NOISE", gMix, 38, 158, 64, 44);
-    addKnob(P::THICK, "THICKNESS", gMix, 38, 202, 64, 44);
+    addKnob(P::MIX_VCO1, "VCO 1", gMix, 6, 34, 64, 66);
+    addKnob(P::MIX_VCO2, "VCO 2", gMix, 70, 34, 64, 66);
+    addKnob(P::MIX_RING, "RING", gMix, 6, 104, 64, 66);
+    addKnob(P::MIX_NOISE, "NOISE", gMix, 70, 104, 64, 66);
+    addKnob(P::THICK, "THICKNESS", gMix, 38, 174, 64, 66);
 
     auto* gFilt = addGroup("FILTER", 620, 64, 336, 252, MonoColors::lavender);
-    addCaption("MIX  >  HPF  >  LPF", gFilt, 60, 30, 220);
-    addCaption("HPF (HIGH PASS)", gFilt, 14, 58, 150);
+    addCaption("MIX  >  HPF  >  LPF", gFilt, 58, 30, 220);
+    addCaption("HPF (HIGH PASS)", gFilt, 10, 58, 150);
     addKnob(P::HPF_CUT, "CUTOFF", gFilt, 14, 74, 64, 78);
     addKnob(P::HPF_PEAK, "PEAK", gFilt, 92, 74, 64, 78);
-    addCaption("LPF (LOW PASS)", gFilt, 180, 58, 150);
+    addCaption("LPF (LOW PASS)", gFilt, 176, 58, 150);
     addKnob(P::LPF_CUT, "CUTOFF", gFilt, 180, 74, 64, 78);
     addKnob(P::LPF_RES, "RESO", gFilt, 258, 74, 64, 78);
-    addKnob(P::DRIVE, "DRIVE", gFilt, 30, 160, 64, 62);
-    addChoice(P::FMODEL, gFilt, 140, 182, 120);
-    addCaption("MODEL", gFilt, 140, 162, 120);
+    // DRIVE centred under the HPF pair, MODEL under the LPF pair, both on
+    // one centre line
+    addKnob(P::DRIVE, "DRIVE", gFilt, 53, 160, 64, 72);
+    addCaption("MODEL", gFilt, 191, 160, 120);
+    addChoice(P::FMODEL, gFilt, 191, 176, 120);
 
     auto* gVca = addGroup("VCA", 964, 64, 120, 252, MonoColors::yellow);
     addKnob(P::VCA_LEVEL, "LEVEL", gVca, 28, 100, 64, 90);
@@ -282,35 +288,36 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     // ---- Panel 1 row 2 ----
     auto* gMg = addGroup("MODULATION GENERATOR", 8, 324, 224, 160, MonoColors::mint);
     addCaption("WAVEFORM", gMg, 10, 30, 204);
-    addWaveButtons(P::MG_WAVE, gMg, 12, 46);
-    addKnob(P::MG_RATE, "RATE", gMg, 20, 88, 64, 60);
-    addToggle(P::MG_SYNC, "SYNC", gMg, 130, 96, 70, 44);
+    addWaveButtons(P::MG_WAVE, gMg, 18, 46);
+    addKnob(P::MG_RATE, "RATE", gMg, 34, 80, 64, 72);
+    addToggle(P::MG_SYNC, "SYNC", gMg, 118, 98, 80, 40);
 
     auto* gEg1 = addGroup("ENVELOPE GENERATOR 1 (FILTER)", 240, 324, 372, 160, MonoColors::yellow);
-    addKnob(P::EG1_A, "ATTACK", gEg1, 8, 40, 72, 84);
-    addKnob(P::EG1_D, "DECAY", gEg1, 100, 40, 72, 84);
-    addKnob(P::EG1_S, "SUSTAIN", gEg1, 192, 40, 72, 84);
-    addKnob(P::EG1_R, "RELEASE", gEg1, 284, 40, 72, 84);
+    addKnob(P::EG1_A, "ATTACK", gEg1, 12, 40, 72, 84);
+    addKnob(P::EG1_D, "DECAY", gEg1, 104, 40, 72, 84);
+    addKnob(P::EG1_S, "SUSTAIN", gEg1, 196, 40, 72, 84);
+    addKnob(P::EG1_R, "RELEASE", gEg1, 288, 40, 72, 84);
 
     auto* gEg2 = addGroup("ENVELOPE GENERATOR 2 (AMP)", 620, 324, 372, 160, MonoColors::yellow);
-    addKnob(P::EG2_A, "ATTACK", gEg2, 8, 40, 72, 84);
-    addKnob(P::EG2_D, "DECAY", gEg2, 100, 40, 72, 84);
-    addKnob(P::EG2_S, "SUSTAIN", gEg2, 192, 40, 72, 84);
-    addKnob(P::EG2_R, "RELEASE", gEg2, 284, 40, 72, 84);
+    addKnob(P::EG2_A, "ATTACK", gEg2, 12, 40, 72, 84);
+    addKnob(P::EG2_D, "DECAY", gEg2, 104, 40, 72, 84);
+    addKnob(P::EG2_S, "SUSTAIN", gEg2, 196, 40, 72, 84);
+    addKnob(P::EG2_R, "RELEASE", gEg2, 288, 40, 72, 84);
 
     auto* gVel = addGroup("EXPRESS", 1000, 324, 272, 160, MonoColors::pink);
-    addKnob(P::VELSENS, "VELOCITY", gVel, 8, 40, 72, 84);
+    addKnob(P::VELSENS, "VELOCITY", gVel, 12, 40, 72, 84);
     addKnob(P::BEND_RANGE, "BEND", gVel, 100, 40, 72, 84);
-    addChoice(P::GLIDE_MODE, gVel, 190, 66, 70);
+    addCaption("GLIDE MODE", gVel, 180, 44, 84);
+    addChoice(P::GLIDE_MODE, gVel, 184, 62, 76); // centred on the knob row
     // ---- Panel 2: mod matrix ----
     auto* gMat = addGroup("MODULATION MATRIX", 8, 492, 760, 332, MonoColors::pink);
     const char* heads[5] = { "#", "SOURCE", "AMOUNT", "DESTINATION", "TYPE" };
-    const int hx[5] = { 8, 40, 250, 380, 590 };
-    const int hw[5] = { 30, 200, 120, 200, 140 };
+    const int hx[5] = { 8, 40, 252, 380, 590 };
+    const int hw[5] = { 30, 200, 100, 200, 160 };
     for (int i = 0; i < 5; ++i) addCaption(heads[i], gMat, hx[i], 30, hw[i]);
     for (int r = 0; r < 8; ++r)
     {
-        int y = 48 + r * 32;
+        int y = 50 + r * 34;
         auto* num = new juce::Label("n" + juce::String(r), juce::String(r + 1));
         labels.emplace_back(num);
         gMat->addAndMakeVisible(num);
@@ -333,16 +340,14 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
         amtKnobs.emplace_back(ak);
         gMat->addAndMakeVisible(ak);
         ak->setBounds(hx[2], y - 1, 26, 26);
-        auto* al = new juce::Label("a" + juce::String(r), "+0%");
+        auto pct = [](float v) { return (v >= 0 ? "+" : "") + juce::String((int)std::round(v * 100)) + "%"; };
+        auto* al = new juce::Label("a" + juce::String(r), pct(ak->getValue()));
         amtLabels.emplace_back(al);
         gMat->addAndMakeVisible(al);
-        al->setBounds(hx[2] + 30, y, 86, 24);
+        al->setBounds(hx[2] + 30, y, 60, 24);
         al->setColour(juce::Label::textColourId, MonoColors::text);
         al->setFont(lnf.uiFont(12.5f));
-        ak->onChange = [al](float v) {
-            al->setText((v >= 0 ? "+" : "") + juce::String((int)std::round(v * 100)) + "%",
-                        juce::dontSendNotification);
-        };
+        ak->onChange = [al, pct](float v) { al->setText(pct(v), juce::dontSendNotification); };
 
         auto* dc = new juce::ComboBox();
         boxes.emplace_back(dc);
@@ -366,46 +371,54 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     }
 
     auto* gGlob = addGroup("GLOBAL", 776, 492, 200, 332, MonoColors::textDim);
-    addCaption("BEND RANGE", gGlob, 10, 40, 180);
-    addKnob(P::BEND_RANGE, "", gGlob, 58, 56, 64, 56);
-    addCaption("GLIDE", gGlob, 10, 130, 180);
-    addKnob(P::PORTA, "", gGlob, 58, 146, 64, 56);
-    addChoice(P::GLIDE_MODE, gGlob, 40, 220, 120);
-    addCaption("NOISE", gGlob, 10, 256, 180);
-    addChoice(P::NOISE_TYPE, gGlob, 40, 272, 120);
+    // four evenly spaced blocks: caption + control, all on the centre line
+    addCaption("BEND RANGE", gGlob, 10, 47, 180);
+    addKnob(P::BEND_RANGE, "", gGlob, 68, 63, 64, 64);
+    addCaption("GLIDE TIME", gGlob, 10, 128, 180);
+    addKnob(P::PORTA, "", gGlob, 68, 144, 64, 64);
+    addCaption("GLIDE MODE", gGlob, 10, 209, 180);
+    addChoice(P::GLIDE_MODE, gGlob, 40, 225, 120);
+    addCaption("NOISE TYPE", gGlob, 10, 266, 180);
+    addChoice(P::NOISE_TYPE, gGlob, 40, 282, 120);
 
     auto* gFx = addGroup("EFFECTS", 984, 492, 288, 332, MonoColors::textDim);
-    addCaption("DISTORTION", gFx, 10, 30, 268);
-    addKnob(P::SAT_AMT, "AMOUNT", gFx, 8, 44, 64, 62);
-    addChoice(P::SAT_TYPE, gFx, 160, 62, 110);
-    addCaption("TYPE", gFx, 160, 44, 110);
-    addCaption("CHORUS", gFx, 10, 110, 268);
-    addKnob(P::CH_RATE, "RATE", gFx, 8, 124, 64, 58);
-    addKnob(P::CH_DEPTH, "DEPTH", gFx, 80, 124, 64, 58);
-    addToggle(P::CH_ON, "ON", gFx, 170, 130, 100, 44);
-    addCaption("DELAY", gFx, 10, 186, 268);
-    addKnob(P::DL_TIME, "TIME", gFx, 8, 200, 56, 56);
-    addKnob(P::DL_FB, "FDBK", gFx, 70, 200, 56, 56);
-    addKnob(P::DL_MIX, "MIX", gFx, 132, 200, 56, 56);
-    addToggle(P::DL_ON, "ON", gFx, 200, 206, 70, 44);
-    addCaption("REVERB", gFx, 10, 260, 268);
-    addKnob(P::RV_SIZE, "SIZE", gFx, 8, 274, 64, 50);
-    addKnob(P::RV_MIX, "MIX", gFx, 80, 274, 64, 50);
-    addToggle(P::RV_ON, "ON", gFx, 170, 280, 100, 40);
+    // four rows on a shared grid: knobs in columns 1-3, switch/selector in
+    // the right column, everything centred on each row's knob line
+    {
+        const int kx[3] = { 12, 76, 140 }, rx = 204, rw = 72;
+        auto rowCap = [&](const char* t, int y0) {
+            addCaption(t, gFx, 12, y0, 264)->setJustificationType(juce::Justification::centredLeft);
+        };
+        const int step = 74, kh = 52; // knob slider 36px + label; 10px air above next caption
+        auto knob = [&](const char* id, const char* lab, int col, int y0) { addKnob(id, lab, gFx, kx[col], y0 + 14, 60, kh); };
+        int y0 = 30;
+        rowCap("DISTORTION", y0);
+        knob(P::SAT_AMT, "AMOUNT", 0, y0);
+        addChoice(P::SAT_TYPE, gFx, rx, y0 + 20, rw);
+        y0 += step;
+        rowCap("CHORUS", y0);
+        knob(P::CH_RATE, "RATE", 0, y0);
+        knob(P::CH_DEPTH, "DEPTH", 1, y0);
+        addToggle(P::CH_ON, "ON", gFx, rx, y0 + 22, rw, 36);
+        y0 += step;
+        rowCap("DELAY", y0);
+        knob(P::DL_TIME, "TIME", 0, y0);
+        knob(P::DL_FB, "FDBK", 1, y0);
+        knob(P::DL_MIX, "MIX", 2, y0);
+        addToggle(P::DL_ON, "ON", gFx, rx, y0 + 22, rw, 36);
+        y0 += step;
+        rowCap("REVERB", y0);
+        knob(P::RV_SIZE, "SIZE", 0, y0);
+        knob(P::RV_MIX, "MIX", 1, y0);
+        addToggle(P::RV_ON, "ON", gFx, rx, y0 + 22, rw, 36);
+    }
 
     // preset browser overlay (created last: paints above everything)
     browser = std::make_unique<PresetBrowser>(proc, lnf);
     addAndMakeVisible(browser.get());
     browser->setVisible(false);
     browser->onClose = [&] { browser->setVisible(false); };
-    browser->onPresetChanged = [&]
-    {
-        if (browser->lastLoadedIsUser)
-            customName = browser->lastLoadedName;
-        else
-            customName = "";
-        refreshPresetName();
-    };
+    browser->onPresetChanged = [&] { refreshPresetName(); };
 
     startTimerHz(4);
 }
@@ -561,42 +574,12 @@ void MonoContent::addOctButtons(const juce::String& param, juce::Component* pare
     }
 }
 
-void MonoContent::openSaveDialog()
-{
-    auto* aw = new juce::AlertWindow("Save Preset", "Preset name:", juce::AlertWindow::NoIcon);
-    aw->addTextEditor("name", "", "My Preset");
-    aw->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
-    aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw](int ok) {
-        std::unique_ptr<juce::AlertWindow> del(aw);
-        if (ok == 0) return;
-        juce::String typed = aw->getTextEditorContents("name");
-        if (saveUserPreset(typed, proc.apvts))
-        {
-            rescanFactoryPresets();
-            customName = sanitisePresetName(typed);
-            refreshPresetName();
-        }
-    }));
-}
-
 void MonoContent::refreshPresetName()
 {
-    if (customName.isNotEmpty())
-    {
-        nameBtn.setButtonText(customName);
-        return;
-    }
-    if (proc.showInit)
-    {
-        nameBtn.setButtonText("Init Patch");
-        return;
-    }
-    int cur = proc.getCurrentProgram();
-    if (cur >= 0 && cur < proc.getNumPrograms())
-        nameBtn.setButtonText(juce::String(cur).paddedLeft('0', 3) + " " + proc.getPresetName(cur));
-    else
-        nameBtn.setButtonText("Init Patch");
+    int slot = proc.getFactorySlot();
+    auto name = proc.getCurrentPresetName();
+    juce::String text = slot >= 0 ? juce::String(slot).paddedLeft('0', 3) + "  " + name : name;
+    if (nameBtn.getButtonText() != text) nameBtn.setButtonText(text);
 }
 
 void MonoContent::paint(juce::Graphics& g)
@@ -608,18 +591,20 @@ void MonoContent::paint(juce::Graphics& g)
     g.fillRect(0, 56, getWidth(), 2);
     g.setColour(MonoColors::text);
     g.setFont(lnf.logoFont(26.0f));
-    g.drawText("MONOSYNTH", 16, 6, 260, 32, juce::Justification::centredLeft, false);
+    g.drawText("MONOSYNTH", 16, 12, 260, 32, juce::Justification::centredLeft, false); // centred in the 56px bar
 }
 
 void MonoContent::resized()
 {
     if (getWidth() <= 0) return;
-    prevBtn.setBounds(400, 14, 32, 28);
-    nameBtn.setBounds(436, 14, 330, 28);
-    nextBtn.setBounds(770, 14, 32, 28);
-    saveBtn.setBounds(806, 14, 32, 28);
-    folderBtn.setBounds(842, 14, 32, 28);
-    initBtn.setBounds(878, 14, 44, 28);
+    // preset bar centred on the window: < [name] >  SAVE INIT
+    const int barW = 32 + 4 + 330 + 4 + 32 + 10 + 60 + 4 + 52;
+    int x = (baseW - barW) / 2;
+    prevBtn.setBounds(x, 14, 32, 28);          x += 36;
+    nameBtn.setBounds(x, 14, 330, 28);         x += 334;
+    nextBtn.setBounds(x, 14, 32, 28);          x += 42;
+    saveBtn.setBounds(x, 14, 60, 28);          x += 64;
+    initBtn.setBounds(x, 14, 52, 28);
     if (volTop != nullptr) volTop->setBounds(getWidth() - 56, 8, 40, 40);
     if (browser != nullptr)
         browser->setBounds(0, 0, baseW, baseH);

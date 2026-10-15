@@ -1,5 +1,6 @@
 #include "Presets.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <map>
 
 // ---------------- factory presets: data files, never code ----------------
 // Shipped XMLs load from the install bundle (Resources/Factory) with dev
@@ -36,10 +37,7 @@ static juce::File factoryBundleDir()
     return juce::File();
 }
 
-static juce::File factoryOverrideDir();
-juce::File getUserPresetDir();
-
-static juce::File factoryOverrideDir()
+juce::File factoryOverrideDir()
 {
     if (useCustomFactoryOverrideDir) return customFactoryOverrideDir;
     return getUserPresetDir().getChildFile("Factory");
@@ -51,6 +49,12 @@ static int bankIndexFor(const juce::String& tag)
     for (int i = 0; i < 6; ++i)
         if (tag.equalsIgnoreCase(names[i])) return i + 1;
     return 0;
+}
+
+juce::String bankName(int bank)
+{
+    static const char* names[] = { "", "Bass", "Acid", "Lead", "Keys", "Drums", "FX" };
+    return bank >= 1 && bank <= 6 ? juce::String(names[bank]) : juce::String();
 }
 
 // "NNN Name [Bank].xml" — bank tag optional; untagged files fall back to
@@ -108,64 +112,12 @@ const std::vector<FactoryPreset>& getFactoryPresets()
     return factory;
 }
 
-static bool applyStateFile(const juce::File& file, juce::AudioProcessorValueTreeState& apvts)
-{
-    auto xml = juce::parseXML(file);
-    if (xml == nullptr) return false;
-    auto vt = juce::ValueTree::fromXml(*xml);
-    if (!vt.isValid()) return false;
-    // reset to defaults, then apply every stored param (unknown ids ignored)
-    for (auto* param : apvts.processor.getParameters())
-        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(param))
-            ranged->setValueNotifyingHost(ranged->getDefaultValue());
-    int applied = 0;
-    for (int i = 0; i < vt.getNumChildren(); ++i)
-    {
-        auto child = vt.getChild(i);
-        if (!child.hasType("PARAM")) continue;
-        juce::String id = child.getProperty("id").toString();
-        if (auto* par = apvts.getParameter(id))
-        {
-            // files store denormalised real units: convert back
-            float denorm = (float)child.getProperty("value", 0.0);
-            par->setValueNotifyingHost(par->convertTo0to1(denorm));
-            ++applied;
-        }
-    }
-    return applied > 0;
-}
-
-void applyPreset(juce::AudioProcessorValueTreeState& apvts, int index)
-{
-    const auto& all = getFactoryPresets();
-    for (auto& pr : all)
-        if (pr.index == index) { applyStateFile(pr.file, apvts); return; }
-}
-
 juce::String presetName(int index)
 {
     const auto& all = getFactoryPresets();
     for (auto& pr : all)
         if (pr.index == index) return pr.name;
     return "Init";
-}
-
-bool overwriteFactoryPreset(int index, juce::AudioProcessorValueTreeState& apvts)
-{
-    const auto& all = getFactoryPresets();
-    const FactoryPreset* row = nullptr;
-    for (auto& pr : all)
-        if (pr.index == index) row = &pr;
-    if (row == nullptr) return false;
-    auto dir = factoryOverrideDir();
-    if (!dir.isDirectory() && !dir.createDirectory()) return false;
-    auto file = dir.getChildFile(row->file.getFileName());
-    if (file.exists() && !file.deleteFile()) return false;
-    bool ok = false;
-    if (auto xml = apvts.copyState().createXml())
-        ok = xml->writeTo(file);
-    if (ok) rescanFactoryPresets();
-    return ok;
 }
 
 bool deleteFactoryShadow(int index)
@@ -181,11 +133,6 @@ bool deleteFactoryShadow(int index)
         }
     }
     return false;
-}
-
-bool loadUserPreset(const juce::File& file, juce::AudioProcessorValueTreeState& apvts)
-{
-    return applyStateFile(file, apvts);
 }
 
 // ---------------- user presets ----------------
@@ -220,18 +167,6 @@ juce::String sanitisePresetName(juce::String name)
     name = name.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-");
     name = name.trim();
     return name.isEmpty() ? juce::String("Untitled") : name;
-}
-
-bool saveUserPreset(const juce::String& name, juce::AudioProcessorValueTreeState& apvts)
-{
-    auto clean = sanitisePresetName(name);
-    auto dir = getUserPresetDir();
-    if (!dir.isDirectory() && !dir.createDirectory()) return false;
-    auto file = dir.getChildFile(clean + ".xml");
-    if (file.exists() && !file.deleteFile()) return false;
-    if (auto xml = apvts.copyState().createXml())
-        return xml->writeTo(file);
-    return false;
 }
 
 bool deleteUserPreset(const juce::File& file)

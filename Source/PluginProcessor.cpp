@@ -115,6 +115,35 @@ MonoProcessor::MonoProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "MONO", createParameterLayout())
 {
+    auto raw = [&](const juce::String& id) {
+        auto* v = apvts.getRawParameterValue(id);
+        jassert(v != nullptr);
+        return v;
+    };
+    pp.vco1wave = raw(P::VCO1_WAVE); pp.vco1oct = raw(P::VCO1_OCT); pp.vco1pitch = raw(P::VCO1_PITCH);
+    pp.vco1tune = raw(P::VCO1_TUNE); pp.vco1pw = raw(P::VCO1_PW);
+    pp.vco2wave = raw(P::VCO2_WAVE); pp.vco2oct = raw(P::VCO2_OCT); pp.vco2pitch = raw(P::VCO2_PITCH);
+    pp.vco2tune = raw(P::VCO2_TUNE); pp.vco2pw = raw(P::VCO2_PW);
+    pp.mix1 = raw(P::MIX_VCO1); pp.mix2 = raw(P::MIX_VCO2); pp.ring = raw(P::MIX_RING);
+    pp.noise = raw(P::MIX_NOISE); pp.thick = raw(P::THICK); pp.noiseType = raw(P::NOISE_TYPE);
+    pp.hpfCut = raw(P::HPF_CUT); pp.hpfPeak = raw(P::HPF_PEAK); pp.lpfCut = raw(P::LPF_CUT);
+    pp.lpfRes = raw(P::LPF_RES); pp.drive = raw(P::DRIVE); pp.fmodel = raw(P::FMODEL);
+    pp.satAmt = raw(P::SAT_AMT); pp.satType = raw(P::SAT_TYPE);
+    pp.vca = raw(P::VCA_LEVEL); pp.volume = raw(P::VOLUME); pp.limiter = raw(P::LIMITER);
+    pp.porta = raw(P::PORTA); pp.portaOn = raw(P::PORTA_ON); pp.glideMode = raw(P::GLIDE_MODE);
+    pp.mgWave = raw(P::MG_WAVE); pp.mgRate = raw(P::MG_RATE); pp.mgSync = raw(P::MG_SYNC);
+    pp.eg1a = raw(P::EG1_A); pp.eg1d = raw(P::EG1_D); pp.eg1s = raw(P::EG1_S); pp.eg1r = raw(P::EG1_R);
+    pp.eg2a = raw(P::EG2_A); pp.eg2d = raw(P::EG2_D); pp.eg2s = raw(P::EG2_S); pp.eg2r = raw(P::EG2_R);
+    pp.bendRange = raw(P::BEND_RANGE); pp.velSens = raw(P::VELSENS);
+    pp.chOn = raw(P::CH_ON); pp.chRate = raw(P::CH_RATE); pp.chDepth = raw(P::CH_DEPTH);
+    pp.dlOn = raw(P::DL_ON); pp.dlTime = raw(P::DL_TIME); pp.dlFb = raw(P::DL_FB); pp.dlMix = raw(P::DL_MIX);
+    pp.rvOn = raw(P::RV_ON); pp.rvSize = raw(P::RV_SIZE); pp.rvMix = raw(P::RV_MIX);
+    for (int i = 0; i < P::NMOD; ++i)
+    {
+        pp.modSrc[i] = raw(P::modSrcId(i)); pp.modAmt[i] = raw(P::modAmtId(i));
+        pp.modDst[i] = raw(P::modDstId(i)); pp.modTyp[i] = raw(P::modTypeId(i));
+    }
+    heldNotes.reserve(128); // never reallocates on the audio thread
     rng.setSeedRandomly();
     loadPreset(0);
 }
@@ -132,8 +161,10 @@ void MonoProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     chorus.prepare(cachedSr, samplesPerBlock);
     delay.prepare(cachedSr);
     verb.prepare(cachedSr);
-    dcBlock.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighPass(cachedSr, 20.0f, 0.7071f);
-    dcBlock.prepare(spec);
+    spec.numChannels = 1;
+    auto hp = juce::dsp::IIR::Coefficients<float>::makeHighPass(cachedSr, 12.0f, 0.7071f);
+    for (auto& f : dcBlock) { f.coefficients = hp; f.prepare(spec); f.reset(); }
+    fxWasOn[0] = fxWasOn[1] = fxWasOn[2] = false;
     MonoDSP::SynthParams d0 = collectParams();
     smHpf = d0.hpfCut; smHpfPk = d0.hpfPeak; smLpf = d0.lpfCut; smLpfRs = d0.lpfRes;
     smDrv = d0.drive; smSat = d0.satAmt; smThick = d0.thick; smM1 = d0.mix1; smM2 = d0.mix2; smRing = d0.ring; smNz = d0.noise;
@@ -146,37 +177,35 @@ void MonoProcessor::releaseResources() {}
 MonoDSP::SynthParams MonoProcessor::collectParams()
 {
     MonoDSP::SynthParams p;
-    auto getF = [&](const char* id) { return apvts.getRawParameterValue(id)->load(); };
-    auto getI = [&](const char* id) { return (int) std::round(apvts.getRawParameterValue(id)->load()); };
-    auto getB = [&](const char* id) { return apvts.getRawParameterValue(id)->load() > 0.5f; };
-    auto getC = [&](const juce::String& id) { return (int) std::round(apvts.getRawParameterValue(id)->load()); };
-    p.vco1wave = getI(P::VCO1_WAVE); p.vco1oct = getI(P::VCO1_OCT);
-    p.vco1pitch = getF(P::VCO1_PITCH); p.vco1tune = getF(P::VCO1_TUNE); p.vco1pw = getF(P::VCO1_PW);
-    p.vco2wave = getI(P::VCO2_WAVE); p.vco2oct = getI(P::VCO2_OCT);
-    p.vco2pitch = getF(P::VCO2_PITCH); p.vco2tune = getF(P::VCO2_TUNE); p.vco2pw = getF(P::VCO2_PW);
-    p.mix1 = getF(P::MIX_VCO1); p.mix2 = getF(P::MIX_VCO2);
-    p.ring = getF(P::MIX_RING); p.noise = getF(P::MIX_NOISE);
-    p.thick = getF(P::THICK);
-    p.noiseType = getI(P::NOISE_TYPE);
-    p.hpfCut = getF(P::HPF_CUT); p.hpfPeak = getF(P::HPF_PEAK);
-    p.lpfCut = getF(P::LPF_CUT); p.lpfRes = getF(P::LPF_RES);
-    p.drive = getF(P::DRIVE); p.fmodel = getI(P::FMODEL);
-    p.satAmt = getF(P::SAT_AMT); p.satType = getI(P::SAT_TYPE);
-    p.vca = getF(P::VCA_LEVEL); p.volume = getF(P::VOLUME); p.limiter = getB(P::LIMITER);
-    p.porta = getF(P::PORTA); p.portaOn = getB(P::PORTA_ON); p.glideMode = getI(P::GLIDE_MODE);
-    p.mgWave = getI(P::MG_WAVE); p.mgRate = getF(P::MG_RATE); p.mgSync = getB(P::MG_SYNC);
-    p.eg1a = getF(P::EG1_A); p.eg1d = getF(P::EG1_D); p.eg1s = getF(P::EG1_S); p.eg1r = getF(P::EG1_R);
-    p.eg2a = getF(P::EG2_A); p.eg2d = getF(P::EG2_D); p.eg2s = getF(P::EG2_S); p.eg2r = getF(P::EG2_R);
-    p.bendRange = getF(P::BEND_RANGE); p.velSens = getF(P::VELSENS);
-    p.chOn = getB(P::CH_ON); p.chRate = getF(P::CH_RATE); p.chDepth = getF(P::CH_DEPTH);
-    p.dlOn = getB(P::DL_ON); p.dlTime = getF(P::DL_TIME); p.dlFb = getF(P::DL_FB); p.dlMix = getF(P::DL_MIX);
-    p.rvOn = getB(P::RV_ON); p.rvSize = getF(P::RV_SIZE); p.rvMix = getF(P::RV_MIX);
-    for (int i = 0; i < P::NMOD; ++i)
+    auto f = [](std::atomic<float>* v) { return v->load(); };
+    auto i = [](std::atomic<float>* v) { return (int) std::round(v->load()); };
+    auto b = [](std::atomic<float>* v) { return v->load() > 0.5f; };
+    p.vco1wave = i(pp.vco1wave); p.vco1oct = i(pp.vco1oct);
+    p.vco1pitch = f(pp.vco1pitch); p.vco1tune = f(pp.vco1tune); p.vco1pw = f(pp.vco1pw);
+    p.vco2wave = i(pp.vco2wave); p.vco2oct = i(pp.vco2oct);
+    p.vco2pitch = f(pp.vco2pitch); p.vco2tune = f(pp.vco2tune); p.vco2pw = f(pp.vco2pw);
+    p.mix1 = f(pp.mix1); p.mix2 = f(pp.mix2);
+    p.ring = f(pp.ring); p.noise = f(pp.noise);
+    p.thick = f(pp.thick);
+    p.noiseType = i(pp.noiseType);
+    p.hpfCut = f(pp.hpfCut); p.hpfPeak = f(pp.hpfPeak);
+    p.lpfCut = f(pp.lpfCut); p.lpfRes = f(pp.lpfRes);
+    p.drive = f(pp.drive); p.fmodel = i(pp.fmodel);
+    p.satAmt = f(pp.satAmt); p.satType = i(pp.satType);
+    p.vca = f(pp.vca); p.volume = f(pp.volume); p.limiter = b(pp.limiter);
+    p.porta = f(pp.porta); p.portaOn = b(pp.portaOn); p.glideMode = i(pp.glideMode);
+    p.mgWave = i(pp.mgWave); p.mgRate = f(pp.mgRate); p.mgSync = b(pp.mgSync);
+    p.eg1a = f(pp.eg1a); p.eg1d = f(pp.eg1d); p.eg1s = f(pp.eg1s); p.eg1r = f(pp.eg1r);
+    p.eg2a = f(pp.eg2a); p.eg2d = f(pp.eg2d); p.eg2s = f(pp.eg2s); p.eg2r = f(pp.eg2r);
+    p.bendRange = f(pp.bendRange); p.velSens = f(pp.velSens);
+    p.chOn = b(pp.chOn); p.chRate = f(pp.chRate); p.chDepth = f(pp.chDepth);
+    p.dlOn = b(pp.dlOn); p.dlTime = f(pp.dlTime); p.dlFb = f(pp.dlFb); p.dlMix = f(pp.dlMix);
+    p.rvOn = b(pp.rvOn); p.rvSize = f(pp.rvSize); p.rvMix = f(pp.rvMix);
+    for (int k = 0; k < P::NMOD; ++k)
     {
-        p.routes[(size_t) i].src = getC(P::modSrcId(i));
-        p.routes[(size_t) i].amt = apvts.getRawParameterValue(P::modAmtId(i))->load();
-        p.routes[(size_t) i].dst = getC(P::modDstId(i));
-        p.routes[(size_t) i].type = getC(P::modTypeId(i));
+        auto& r = p.routes[(size_t) k];
+        r.src = i(pp.modSrc[k]); r.amt = f(pp.modAmt[k]);
+        r.dst = i(pp.modDst[k]); r.type = i(pp.modTyp[k]);
     }
     p.pitchBend = bendSemis;
     return p;
@@ -184,14 +213,20 @@ MonoDSP::SynthParams MonoProcessor::collectParams()
 
 void MonoProcessor::updateHeld(int note, bool on)
 {
-    if (on) { if (std::find(heldNotes.begin(), heldNotes.end(), note) == heldNotes.end()) heldNotes.push_back(note); }
-    else heldNotes.erase(std::remove(heldNotes.begin(), heldNotes.end(), note), heldNotes.end());
-    std::sort(heldNotes.begin(), heldNotes.end());
+    // kept in press order: releasing a note returns to the most recent one
+    // still held (last-note priority, matching how new notes always sound)
+    heldNotes.erase(std::remove(heldNotes.begin(), heldNotes.end(), note), heldNotes.end());
+    if (on) heldNotes.push_back(note);
 }
 
-void MonoProcessor::handleMidi(const juce::MidiMessage& msg)
+void MonoProcessor::allNotesOff()
 {
-    MonoDSP::SynthParams tmp = collectParams();
+    heldNotes.clear();
+    voice.noteOff();
+}
+
+void MonoProcessor::handleMidi(const juce::MidiMessage& msg, const MonoDSP::SynthParams& tmp)
+{
     if (msg.isNoteOn())
     {
         int n = msg.getNoteNumber();
@@ -225,6 +260,19 @@ void MonoProcessor::handleMidi(const juce::MidiMessage& msg)
         bendSemis = ((float) v - 8192.0f) / 8192.0f * range;
         pitchWheelSrc = ((float) v - 8192.0f) / 8192.0f;
     }
+    // channel-mode messages are controllers too: test them before the
+    // generic controller branch or they never fire
+    else if (msg.isAllSoundOff())
+    {
+        heldNotes.clear();
+        voice.kill();
+    }
+    else if (msg.isAllNotesOff()) allNotesOff();
+    else if (msg.isResetAllControllers())
+    {
+        modWheel = 0.0f; aftertouch = 0.0f;
+        bendSemis = 0.0f; pitchWheelSrc = 0.0f;
+    }
     else if (msg.isController())
     {
         if (msg.getControllerNumber() == 1) modWheel = (float) msg.getControllerValue() / 127.0f;
@@ -233,11 +281,6 @@ void MonoProcessor::handleMidi(const juce::MidiMessage& msg)
     else if (msg.isAftertouch())
     {
         if (msg.getNoteNumber() == voice.note) aftertouch = (float) msg.getAfterTouchValue() / 127.0f;
-    }
-    else if (msg.isAllNotesOff() || msg.isAllSoundOff())
-    {
-        heldNotes.clear();
-        voice.noteOff();
     }
 }
 
@@ -264,16 +307,26 @@ static inline float softCeil(float x)
 void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi){
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
+    if (pendingPanic.exchange(false))
+    {
+        heldNotes.clear();
+        bendSemis = 0.0f; bendSm = 0.0f; pitchWheelSrc = 0.0f;
+        modWheel = 0.0f; aftertouch = 0.0f;
+        voice.kill();
+        chorus.clear(); delay.clear(); verb.clear();
+    }
+    if (pendingAllOff.exchange(false))
+    {
+        allNotesOff();
+        bendSemis = 0.0f; pitchWheelSrc = 0.0f;
+    }
     MonoDSP::SynthParams p = collectParams();
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
             if (pos->getBpm()) hostBpm = *pos->getBpm();
 
-    // MIDI learn of sustain pedal: treat CC64 held as legato hold
-    struct Ev { int pos; juce::MidiMessage msg; };
-    std::vector<Ev> evs;
-    for (auto m : midi) evs.push_back({ m.samplePosition, m.getMessage() });
-    size_t evIdx = 0;
+    auto midiIt = midi.cbegin();
+    const auto midiEnd = midi.cend();
 
     int numSamples = buffer.getNumSamples();
     float* outL = buffer.getWritePointer(0);
@@ -288,10 +341,12 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const float tDrv = p.drive, tM1 = p.mix1, tM2 = p.mix2, tRing = p.ring, tNz = p.noise;
     const float tVol = p.volume, tVca = p.vca, tSat = p.satAmt, tThk = p.thick;
     voice.setModel(p.fmodel);
+    voice.updateEnvelopes(p);
 
     for (int s = 0; s < numSamples; ++s)
     {
-        while (evIdx < evs.size() && evs[evIdx].pos == s) handleMidi(evs[evIdx++].msg);
+        for (; midiIt != midiEnd && (*midiIt).samplePosition <= s; ++midiIt)
+            handleMidi((*midiIt).getMessage(), p);
 
         smHpf += (tHpf - smHpf) * smK;         p.hpfCut = smHpf;
         smHpfPk += (tHpfPk - smHpfPk) * smK;   p.hpfPeak = smHpfPk;
@@ -320,24 +375,36 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         outL[s] = g;
         if (outR) outR[s] = g;
     }
+    for (; midiIt != midiEnd; ++midiIt) // stray events past the block end
+        handleMidi((*midiIt).getMessage(), p);
     midi.clear();
 
     // Master FX: chorus -> delay -> reverb (each bypassed when off/mix 0).
+    // Enabling an effect starts from silence, not from the tail that was
+    // frozen in its buffer when it was switched off.
+    if (outR != nullptr)
     {
-        float* fxR = outR != nullptr ? outR : outL;
-        if (p.chOn) chorus.process(outL, fxR, numSamples, p.chRate, p.chDepth, 0.5f);
-        if (p.dlOn) delay.process(outL, fxR, numSamples, p.dlTime, p.dlFb, p.dlMix);
-        if (p.rvOn) verb.process(outL, fxR, numSamples, p.rvSize, 0.5f, p.rvMix);
+        if (p.chOn && ! fxWasOn[0]) chorus.clear();
+        if (p.dlOn && ! fxWasOn[1]) delay.clear();
+        if (p.rvOn && ! fxWasOn[2]) verb.clear();
+        fxWasOn[0] = p.chOn; fxWasOn[1] = p.dlOn; fxWasOn[2] = p.rvOn;
+        if (p.chOn) chorus.process(outL, outR, numSamples, p.chRate, p.chDepth, 0.5f);
+        if (p.dlOn) delay.process(outL, outR, numSamples, p.dlTime, p.dlFb, p.dlMix);
+        if (p.rvOn) verb.process(outL, outR, numSamples, p.rvSize, 0.5f, p.rvMix);
     }
 
-    // 20 Hz cleanup (DC + subsonics), then musical peak limiter + idle gate.
+    // 12 Hz cleanup (DC + subsonics; per channel), then musical peak limiter + idle gate.
     // A single stage kills DC dead with minimal phase dispersion in the audio
     // band (extra cascaded stages audibly tilt saw/square waves on a scope
     // for no musical benefit).
     {
         juce::dsp::AudioBlock<float> block(buffer);
-        juce::dsp::ProcessContextReplacing<float> ctx(block);
-        dcBlock.process(ctx);
+        for (int ch = 0; ch < juce::jmin(2, buffer.getNumChannels()); ++ch)
+        {
+            auto chBlock = block.getSingleChannelBlock((size_t) ch);
+            juce::dsp::ProcessContextReplacing<float> ctx(chBlock);
+            dcBlock[ch].process(ctx);
+        }
     }
     {
         float att = 1.0f - std::exp(-1.0f / (0.0003f * (float) cachedSr));
@@ -349,6 +416,7 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         if (anyActive) idleSamples = 0; else idleSamples += numSamples;
         bool shouldClose = idleSamples > (int) (6.0 * cachedSr);
         int nch = buffer.getNumChannels();
+        bool wasOpen = gateG > 0.0f;
         for (int s = 0; s < numSamples; ++s)
         {
             if (shouldClose && gateG > 0.0f) gateG = juce::jmax(0.0f, gateG - gateStep);
@@ -372,6 +440,9 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
                         buffer.setSample(ch, s, buffer.getSample(ch, s) * gateG);
             }
         }
+        // gate fully closed: drop the muted FX tails so they don't resurface
+        // when the next note reopens it
+        if (wasOpen && gateG <= 0.0f) { chorus.clear(); delay.clear(); verb.clear(); }
     }
 }
 
@@ -382,43 +453,72 @@ void MonoProcessor::setCurrentProgram(int index)
 
 const juce::String MonoProcessor::getProgramName(int index) { return presetName(index); }
 
-void MonoProcessor::loadPreset(int index)
+void MonoProcessor::setPresetIdentity(int factoryIndex, const juce::String& name)
 {
-    int n = juce::jmax(1, (int) getFactoryPresets().size());
-    currentPreset = juce::jlimit(0, n - 1, index);
-    showInit = false;
+    currentPreset = factoryIndex;
+    currentName = name;
+}
+
+void MonoProcessor::resetParamsToDefaults()
+{
     for (auto* param : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*>(param))
             r->setValueNotifyingHost(r->getDefaultValue());
-    applyPreset(apvts, currentPreset);
+}
+
+void MonoProcessor::loadPreset(int index)
+{
+    int n = juce::jmax(1, (int) getFactoryPresets().size());
+    index = juce::jlimit(0, n - 1, index);
+    if (! applyPreset(*this, index)) // sets slot + name on success
+    {
+        resetParamsToDefaults();
+        setPresetIdentity(-1, "Init Patch");
+    }
 }
 
 void MonoProcessor::loadInit()
 {
-    for (auto* param : getParameters())
-        if (auto* r = dynamic_cast<juce::RangedAudioParameter*>(param))
-            r->setValueNotifyingHost(r->getDefaultValue());
-    showInit = true;
-    heldNotes.clear();
-    bendSemis = 0.0f;
-    voice.noteOff();
+    resetParamsToDefaults();
+    setPresetIdentity(-1, "Init Patch");
+    pendingAllOff = true; // serviced on the audio thread
 }
 
-void MonoProcessor::panic()
+void MonoProcessor::panic() { pendingPanic = true; }
+
+juce::ValueTree MonoProcessor::presetState()
 {
-    heldNotes.clear();
-    bendSemis = 0.0f; bendSm = 0.0f;
-    modWheel = 0.0f; aftertouch = 0.0f;
-    voice.kill();
-    chorus.clear(); delay.clear(); verb.clear();
+    auto state = apvts.copyState();
+    state.setProperty("presetName", currentName, nullptr);
+    return state;
+}
+
+// Reset to defaults, then apply every stored param (unknown ids ignored).
+// Files store denormalised real units.
+bool MonoProcessor::loadPresetState(const juce::ValueTree& vt)
+{
+    if (! vt.isValid()) return false;
+    resetParamsToDefaults();
+    int applied = 0;
+    for (int i = 0; i < vt.getNumChildren(); ++i)
+    {
+        auto child = vt.getChild(i);
+        if (! child.hasType("PARAM")) continue;
+        if (auto* par = apvts.getParameter(child.getProperty("id").toString()))
+        {
+            par->setValueNotifyingHost(par->convertTo0to1((float) child.getProperty("value", 0.0)));
+            ++applied;
+        }
+    }
+    return applied > 0;
 }
 
 juce::String MonoProcessor::getPresetName(int i) const { return presetName(i); }
 
 void MonoProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    auto state = apvts.copyState();
-    state.setProperty("prog", currentPreset, nullptr);
+    auto state = presetState();
+    state.setProperty("prog", currentPreset.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, destData);
 }
 
@@ -427,10 +527,13 @@ void MonoProcessor::setStateInformation(const void* data, int sizeInBytes)
     if (auto xml = getXmlFromBinary(data, sizeInBytes))
     {
         auto vt = juce::ValueTree::fromXml(*xml);
-        if (vt.isValid())
+        if (vt.isValid() && vt.hasType(apvts.state.getType()))
         {
             apvts.replaceState(vt);
-            currentPreset = vt.getProperty("prog", 0);
+            int prog = vt.getProperty("prog", 0);
+            juce::String nm = vt.getProperty("presetName", juce::String()).toString();
+            if (nm.isEmpty()) nm = prog >= 0 ? presetName(prog) : juce::String("Init Patch");
+            setPresetIdentity(prog, nm);
         }
     }
 }

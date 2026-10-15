@@ -1,5 +1,7 @@
 #include "PresetRecipes.h"
 #include "Parameters.h"
+#include "PresetLevels.h"
+#include <cstdlib>
 
 // Recipe builders for the 256 factory data files. See Presets.h for the
 // musical house rules. Dumped to Factory/*.xml by the PresetDump tool;
@@ -520,6 +522,13 @@ std::vector<RecipePreset> buildRecipePresets()
         b.noPitch(5);
         b.route(7, 9, rf(0.2f, 0.6f), 6, 0);
         add(nm3(341 + i, dfxN[i % 8], i >= 8 ? (" " + juce::String(i / 8 + 1)).toStdString().c_str() : "", "FX"), b);
+    }
+    // loudness-matched output level per slot (filename starts with "NNN ")
+    const int nLevels = (int)(sizeof(kPresetVolume) / sizeof(kPresetVolume[0]));
+    for (auto& pr : out)
+    {
+        int idx = std::atoi(pr.fileName.substr(0, 3).c_str());
+        if (idx >= 0 && idx < nLevels) pr.values[P::VOLUME] = kPresetVolume[idx];
     }
     return out;
 }

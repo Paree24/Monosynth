@@ -6,6 +6,7 @@
 #include <map>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "PresetBrowser.h"
 
 #define CHECK(cond, msg) do { \
     if (!(cond)) { printf("FAIL: %s\n", msg); return 1; } \
@@ -35,7 +36,56 @@ static float rmsOf(const std::vector<float>& v)
     return (float) std::sqrt(s / (double) n);
 }
 
-int main(int, char**)
+// Loudness survey: every factory preset plays C3 for ~1.5 s at velocity 0.8.
+// Reports momentary loudness (loudest 400 ms RMS window, dBFS, power-averaged
+// over several renders; fair to plucks and drums as well as pads) and peak. Diagnostic only.
+static int loudnessSurvey()
+{
+    std::unique_ptr<MonoProcessor> proc(new MonoProcessor());
+    int n = proc->getNumPrograms();
+    const int win = 17640; // 400 ms @ 44.1k
+    printf("idx\tmom_db\tpeak_db\tname\n");
+    const int runs = 6; // presets with S&H / random sources vary per render: average power
+    for (int pi = 0; pi < n; ++pi)
+    {
+      double powSum = 0.0; float peak = 0.0f;
+      for (int run = 0; run < runs; ++run)
+      {
+        std::unique_ptr<MonoProcessor> pq(new MonoProcessor());
+        pq->setRateAndBufferSizeDetails(44100, 512);
+        pq->prepareToPlay(44100.0, 512);
+        pq->setCurrentProgram(pi);
+        juce::AudioBuffer<float> b(2, 512); juce::MidiBuffer m;
+        std::vector<double> ms; ms.reserve(130 * 512);
+        for (int k = 0; k < 130; ++k)
+        {
+            m.clear();
+            if (k == 0) m.addEvent(juce::MidiMessage::noteOn(1, 48, 0.8f), 0);
+            if (k == 129) m.addEvent(juce::MidiMessage::noteOff(1, 48), 0);
+            b.clear(); pq->processBlock(b, m);
+            for (int i = 0; i < 512; ++i)
+            {
+                float l = b.getSample(0, i), r = b.getSample(1, i);
+                peak = juce::jmax(peak, std::abs(l), std::abs(r));
+                ms.push_back(0.5 * ((double) l * l + (double) r * r));
+            }
+        }
+        double acc = 0.0, best = 0.0;
+        for (size_t i = 0; i < ms.size(); ++i)
+        {
+            acc += ms[i];
+            if (i >= (size_t) win) acc -= ms[i - (size_t) win];
+            if (i + 1 >= (size_t) win) best = juce::jmax(best, acc / win);
+        }
+        powSum += best;
+      }
+        printf("%d\t%.2f\t%.2f\t%s\n", pi, 10.0 * std::log10(powSum / runs + 1e-12),
+               20.0 * std::log10(peak + 1e-9), proc->getPresetName(pi).toRawUTF8());
+    }
+    return 0;
+}
+
+int main(int argc, char** argv)
 {
     {
         juce::File repoFactory;
@@ -58,13 +108,14 @@ int main(int, char**)
         setUserPresetDirForTest(tmpUser);
         printf("factory dir: %s\n", repoFactory.getFullPathName().toRawUTF8());
     }
+    if (argc > 1 && juce::String(argv[1]) == "--loudness") return loudnessSurvey();
     printf("--- init patch is neutral and static ---\n");
     {
         std::unique_ptr<MonoProcessor> pi(new MonoProcessor());
         pi->setRateAndBufferSizeDetails(44100, 512);
         pi->prepareToPlay(44100.0, 512);
         pi->loadInit();
-        CHECK(pi->showInit, "init flag set");
+        CHECK(pi->getFactorySlot() == -1 && pi->getCurrentPresetName() == "Init Patch", "init identity set");
         for (int r = 0; r < 8; ++r)
         {
             auto* s = pi->apvts.getRawParameterValue(P::modSrcId(r));
@@ -589,16 +640,16 @@ int main(int, char**)
         pu->prepareToPlay(44100.0, 512);
         CHECK(scanUserPresets().empty(), "user bank starts empty");
         pu->setCurrentProgram(80);
-        CHECK(saveUserPreset("Harness Test!", pu->apvts), "save user preset");
-        CHECK(saveUserPreset("Second One", pu->apvts), "save second preset");
+        CHECK(saveUserPreset("Harness Test!", *pu), "save user preset");
+        CHECK(saveUserPreset("Second One", *pu), "save second preset");
         auto found = scanUserPresets();
         CHECK(found.size() == 2, "scan finds both");
         CHECK(found[0].name == "Harness Test", "name sanitised");
         pu->setCurrentProgram(0);
-        CHECK(loadUserPreset(found[0].file, pu->apvts), "load user preset");
+        CHECK(loadUserPreset(found[0].file, *pu), "load user preset");
         // shadow a factory preset, verify, then restore the shipped file
         pu->setCurrentProgram(10);
-        CHECK(overwriteFactoryPreset(10, pu->apvts), "overwrite factory (shadow)");
+        CHECK(overwriteFactoryPreset(10, *pu), "overwrite factory (shadow)");
         {
             bool seen = false;
             for (auto& pr : getFactoryPresets())
@@ -612,7 +663,7 @@ int main(int, char**)
                 if (pr.index == 10) seen = !pr.shadowed;
             CHECK(seen, "shipped file restored");
         }
-        CHECK(!loadUserPreset(getUserPresetDir().getChildFile("nope.xml"), pu->apvts),
+        CHECK(!loadUserPreset(getUserPresetDir().getChildFile("nope.xml"), *pu),
               "missing file fails clean");
         CHECK(deleteUserPreset(found[0].file), "delete user preset works");
         CHECK(scanUserPresets().size() == 1, "one remains");
@@ -712,6 +763,22 @@ int main(int, char**)
         png.deleteFile();
         { juce::FileOutputStream fos(png); juce::PNGImageFormat fmt; fmt.writeImageToStream(img, fos); }
         printf("screenshot: %s\n", png.getFullPathName().toRawUTF8());
+
+        // preset browser overlay, opened for saving
+        std::function<PresetBrowser*(juce::Component&)> findBrowser = [&](juce::Component& c) -> PresetBrowser* {
+            if (auto* pb = dynamic_cast<PresetBrowser*>(&c)) return pb;
+            for (auto* ch : c.getChildren()) if (auto* r = findBrowser(*ch)) return r;
+            return nullptr;
+        };
+        auto* pb = findBrowser(*ed);
+        CHECK(pb != nullptr, "preset browser present");
+        pb->openForSave();
+        juce::Image img2(juce::Image::RGB, MonoContent::baseW, MonoContent::baseH, true);
+        { juce::Graphics g(img2); ed->paintEntireComponent(g, false); }
+        juce::File png2("/tmp/monosynth-ui-browser.png");
+        png2.deleteFile();
+        { juce::FileOutputStream fos(png2); juce::PNGImageFormat fmt; fmt.writeImageToStream(img2, fos); }
+        printf("screenshot: %s\n", png2.getFullPathName().toRawUTF8());
     }
 
     printf("ALL TESTS PASSED\n");

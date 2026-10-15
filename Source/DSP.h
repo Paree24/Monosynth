@@ -58,11 +58,19 @@ inline float oscSample(int wave, double phase, float pw, double dt)
 class EnvADSR
 {
 public:
-    void setSampleRate(double sr) { sampleRate = sr; }
+    void setSampleRate(double sr) { sampleRate = sr; att = -1.0f; }
+    // Cheap to call every block: coefficients are only recomputed on change,
+    // so knob moves reach held notes (sustain/release apply immediately).
     void setParams(float a, float d, float s, float r)
     {
-        att = std::max(a, 0.001f); dec = std::max(d, 0.002f);
-        sus = juce::jlimit(0.0f, 1.0f, s); rel = std::max(r, 0.005f);
+        a = std::max(a, 0.001f); d = std::max(d, 0.002f);
+        s = juce::jlimit(0.0f, 1.0f, s); r = std::max(r, 0.005f);
+        const float sr = (float)sampleRate;
+        if (a != att) { att = a; ka = 1.0f - std::exp(-3.0f / (att * sr)); }
+        if (d != dec) { dec = d; kd = 1.0f - std::exp(-3.0f / (dec * sr)); }
+        if (r != rel) { rel = r; kr = std::exp(-3.0f / (rel * sr)); }
+        sus = s;
+        if (state == State::Sustain) level = sus;
     }
     void noteOn() { state = State::Attack; }
     void noteOff() { if (state != State::Idle) state = State::Release; }
@@ -73,25 +81,19 @@ public:
         switch (state)
         {
             case State::Idle: return 0.0f;
-            case State::Attack: {
-                float ka = 1.0f - std::exp(-3.0f / (att * (float)sampleRate));
+            case State::Attack:
                 level += (1.0f - level) * ka;
                 if ((1.0f - level) < 0.005f) state = State::Decay;
                 return level;
-            }
-            case State::Decay: {
-                float kd = 1.0f - std::exp(-3.0f / (dec * (float)sampleRate));
+            case State::Decay:
                 level += (sus - level) * kd;
                 if (std::fabs(level - sus) < 0.002f) { level = sus; state = State::Sustain; }
                 return level;
-            }
             case State::Sustain: return sus;
-            case State::Release: {
-                float kr = std::exp(-3.0f / (rel * (float)sampleRate));
+            case State::Release:
                 level *= kr;
                 if (level < 0.0006f) { level = 0.0f; state = State::Idle; return 0.0f; }
                 return level;
-            }
         }
         return 0.0f;
     }
@@ -99,7 +101,8 @@ private:
     enum class State { Idle, Attack, Decay, Sustain, Release };
     State state = State::Idle;
     double sampleRate = 44100.0;
-    float att = 0.01f, dec = 0.2f, sus = 0.7f, rel = 0.3f, level = 0.0f;
+    float att = -1.0f, dec = -1.0f, sus = 0.7f, rel = -1.0f, level = 0.0f;
+    float ka = 0.0f, kd = 0.0f, kr = 0.0f;
 };
 
 // ---------------- Modulation generator (LFO) ----------------
@@ -186,10 +189,26 @@ static inline float resQ(float r, int model) // log-taper pot -> stage Q
     return 0.5f + t * qmax;
 }
 
+// Self-oscillation zone: damping fades toward 5% over the last stretch of
+// the pot instead of stepping at a threshold (a hard step made the resonance
+// jump audibly as a smoothed knob or the mod matrix crossed it).
+static inline float whistleAmt(float r)
+{
+    float t = juce::jlimit(0.0f, 1.0f, (r - 0.95f) / 0.035f);
+    return t * t * (3.0f - 2.0f * t);
+}
+static inline float resK(float r, int model) { return (1.0f / resQ(r, model)) * (1.0f - 0.95f * whistleAmt(r)); }
+
+
 class CascadeFilter
 {
 public:
-    void prepare(double sr) { sampleRate = sr; reset(); }
+    void prepare(double sr)
+    {
+        sampleRate = sr; reset();
+        // bass-loss tracker: one pole at 300 Hz, updated once per host sample
+        gBass = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 300.0f / (float)sr);
+    }
     void reset() { hpSec.reset(); lpSec.reset(); blp = 0.0f; }
     void setModel(int m) { model = juce::jlimit(0, 1, m); }
 
@@ -207,18 +226,14 @@ public:
             x = std::tanh(x * dg) / (1.0f + drive * 1.5f);
         }
 
-        float qH = resQ(hpfPeak, model), qL = resQ(lpfRes, model);
         // self-oscillation zone: damping drops toward zero and circuit noise
         // keeps the loop singing (like the hardware whistle with no input)
-        bool susH = hpfPeak >= 0.985f, susL = lpfRes >= 0.985f;
-        float kH = 1.0f / qH, kL = 1.0f / qL;
-        if (susH) kH *= 0.05f;
-        if (susL) kL *= 0.05f;
+        float kH = resK(hpfPeak, model), kL = resK(lpfRes, model);
+        float whistle = juce::jmax(whistleAmt(hpfPeak), whistleAmt(lpfRes));
         // 2x internal: step at double rate, hold input, average sub-outputs
         float sr2 = (float)sampleRate * 2.0f;
         float gH = juce::jmin(std::tan(juce::MathConstants<float>::pi * fcH / sr2), 7.0f);
         float gL = juce::jmin(std::tan(juce::MathConstants<float>::pi * fcL / sr2), 7.0f);
-        // OTA transfer hardness per model: Early clips harder, Late softer.
         // OTA transfer hardness per model: Early clips harder, Late softer.
         // Kept gentle enough that low-resonance settings stay linear (scope-
         // clean); the huge resonant swings still compress deeply and scream.
@@ -228,23 +243,20 @@ public:
         hpSec.step(x,  gH, kH, satG, dummy, hp1);
         hpSec.step(x,  gH, kH, satG, dummy, hp2);
         float h = (hp1 + hp2) * 0.5f;
-        if (susL || susH) // circuit-noise excitation in the whistle zone
+        if (whistle > 0.0f) // circuit-noise excitation in the whistle zone
         {
             whState = whState * 1664525u + 1013904223u;
-            h += ((float)(whState >> 16) / 32768.0f - 1.0f) * 0.02f;
+            h += ((float)(whState >> 16) / 32768.0f - 1.0f) * 0.02f * whistle;
         }
         lpSec.step(h,  gL, kL, satG, lp1, dummy);
         lpSec.step(h,  gL, kL, satG, lp2, dummy);
         float y = (lp1 + lp2) * 0.5f;
         // resonance steals bass (strong on Early, mild on Late)
+        // (tracker always runs so it never restarts from a stale value when
+        // resonance is swept up from zero)
         float bassK = (model == 0 ? 0.8f : 0.35f) * lpfRes * lpfRes;
-        if (bassK > 0.001f)
-        {
-            float gB = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 300.0f / sr2);
-            float yl = (lp1 + lp2) * 0.5f;
-            blp += gB * (yl - blp);
-            y -= bassK * blp;
-        }
+        blp += gBass * (y - blp);
+        if (bassK > 0.001f) y -= bassK * blp;
         y = 3.0f * std::tanh(y / 3.0f); // high rails: clean when calm, clips when screaming
         if (! std::isfinite(y)) { reset(); return 0.0f; }
         return y;
@@ -256,9 +268,7 @@ public:
         float g = std::tan(juce::MathConstants<float>::pi *
                            juce::jlimit(10.0f, 18000.0f, cutoff) / (float)sampleRate);
         g = juce::jmin(g, 7.0f);
-        float q = resQ(peak, model);
-        float k = 1.0f / q;
-        if (peak >= 0.985f) k *= 0.05f;
+        float k = resK(peak, model);
         float outLP, outHP;
         hpSec.step(x, g, k, 1.2f, outLP, outHP);
         return outHP;
@@ -268,9 +278,7 @@ public:
         float g = std::tan(juce::MathConstants<float>::pi *
                            juce::jlimit(20.0f, 19000.0f, cutoff) / (float)sampleRate);
         g = juce::jmin(g, 7.0f);
-        float q = resQ(res, model);
-        float k = 1.0f / q;
-        if (res >= 0.985f) k *= 0.05f;
+        float k = resK(res, model);
         float outLP, outHP;
         lpSec.step(x, g, k, 1.2f, outLP, outHP);
         return outLP;
@@ -280,7 +288,7 @@ private:
     double sampleRate = 44100.0;
     int model = 0;
     OTASection hpSec, lpSec;
-    float blp = 0.0f; // bass-loss tracker state
+    float blp = 0.0f, gBass = 0.04f; // bass-loss tracker state + coefficient
     juce::uint32 whState = 22222u; // whistle-zone noise source
 };
 
@@ -415,6 +423,12 @@ public:
         if (retrigger) { eg1.noteOn(); eg2.noteOn(); }
     }
     void noteOff() { gated = false; eg1.noteOff(); eg2.noteOff(); }
+    // once per block: envelope knobs act on the note that is already sounding
+    void updateEnvelopes(const SynthParams& p)
+    {
+        eg1.setParams(p.eg1a, p.eg1d, p.eg1s, p.eg1r);
+        eg2.setParams(p.eg2a, p.eg2d, p.eg2s, p.eg2r);
+    }
     void kill() { active = false; eg1.reset(); eg2.reset(); }
     void setTarget(float m) { targetMidi = m; }
     float lastOut() const { return lastSample; }
@@ -425,9 +439,13 @@ public:
         // portamento glide toward target
         if (p.portaOn && p.porta > 0.001f)
         {
-            float t = 0.002f + p.porta * p.porta * 0.6f;
-            float c = 1.0f - (float)std::exp(-1.0 / (sampleRate * t));
-            curMidi += (targetMidi - curMidi) * c;
+            if (p.porta != glideKnob)
+            {
+                glideKnob = p.porta;
+                float t = 0.002f + p.porta * p.porta * 0.6f;
+                glideCoef = 1.0f - (float)std::exp(-1.0 / (sampleRate * t));
+            }
+            curMidi += (targetMidi - curMidi) * glideCoef;
         }
         else curMidi = targetMidi;
 
@@ -438,7 +456,8 @@ public:
         { active = false; lastSample = 0.0f; return 0.0f; }
 
         // ---- modulation sources ----
-        float keyTrk = juce::jlimit(-1.0f, 1.0f, ((float)note - 60.0f) / 36.0f);
+        // follows the gliding pitch, so key-tracked cutoff slides with portamento
+        float keyTrk = juce::jlimit(-1.0f, 1.0f, (curMidi - 60.0f) / 36.0f);
         float srcVals[11] = {};
         srcVals[1] = mgVal; srcVals[2] = e1; srcVals[3] = e2;
         srcVals[4] = velocity; srcVals[5] = aftertouch; srcVals[6] = keyTrk;
@@ -535,6 +554,7 @@ private:
     double ph1 = 0.0, ph2 = 0.0;
     float curMidi = 60.0f, targetMidi = 60.0f;
     float randomHold = 0.0f, slopCut = 1.0f;
+    float glideKnob = -1.0f, glideCoef = 1.0f;
     int clickCount = 96;
     float lastSample = 0.0f;
 };

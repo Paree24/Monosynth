@@ -49,6 +49,7 @@ target_sources(Monosynth PRIVATE
   Source/PluginEditor.cpp
   Source/PresetBrowser.cpp
   Source/Presets.cpp
+  Source/PresetFiles.cpp
 )
 
 target_include_directories(Monosynth PRIVATE Source)
@@ -74,6 +75,7 @@ target_sources(MonoHarness PRIVATE
   Source/PluginEditor.cpp
   Source/PresetBrowser.cpp
   Source/Presets.cpp
+  Source/PresetFiles.cpp
 )
 target_include_directories(MonoHarness PRIVATE Source)
 target_compile_definitions(MonoHarness PRIVATE
