@@ -42,7 +42,7 @@ struct Builder
         route(0, 1, 0.12f, 6, 0);
         route(1, 2, 0.55f, 6, 0);
         route(2, 2, 0.20f, 5, 0);
-        route(3, 3, 1.00f, 9, 1);
+        route(3, 0, 0.00f, 0, 1); // no EG2 -> VCA: EG2 already drives the VCA (no squared amp curve)
         route(4, 4, 0.50f, 9, 1);
         route(5, 0, 0.00f, 0, 0);
         route(6, 6, 0.30f, 6, 0);

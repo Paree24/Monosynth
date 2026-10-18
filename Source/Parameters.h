@@ -48,6 +48,13 @@ namespace P
     static constexpr const char* EG1_S = "eg1s"; static constexpr const char* EG1_R = "eg1r";
     static constexpr const char* EG2_A = "eg2a"; static constexpr const char* EG2_D = "eg2d";
     static constexpr const char* EG2_S = "eg2s"; static constexpr const char* EG2_R = "eg2r";
+    // envelope extras: EG1 DELAY (attack waits), EG2 HOLD (gate held open)
+    static constexpr const char* EG1_DELAY = "eg1delay"; // 0..10 s
+    static constexpr const char* EG2_HOLD  = "eg2hold";  // 0..10 s
+    static constexpr const char* VCA_INIT  = "vcainit";  // 0..1 VCA initial gain (drone)
+    // Arpeggiator (MIDI arp ahead of the mono voice)
+    static constexpr const char* ARP_ON = "arpon", *ARP_MODE = "arpmode", *ARP_DIV = "arpdiv", *ARP_OCT = "arpoct",
+                                 *ARP_GATE = "arpgate", *ARP_SWING = "arpswing", *ARP_LATCH = "arplatch";
     // Global
     static constexpr const char* BEND_RANGE = "bendrange"; // 0..12 semitones
     static constexpr const char* VELSENS    = "velsens";   // 0..1
@@ -59,6 +66,8 @@ namespace P
     static constexpr const char* DL_TIME  = "dltime";   // ms
     static constexpr const char* DL_FB    = "dlfb";     // 0..0.85
     static constexpr const char* DL_MIX   = "dlmix";    // 0..1
+    static constexpr const char* DL_SYNC  = "dlsync";   // bool: time from host tempo
+    static constexpr const char* DL_DIV   = "dldiv";    // 0 1/4 1/8 1/8D 1/4T 1/16 1/2
     static constexpr const char* RV_ON    = "rvon";
     static constexpr const char* RV_SIZE  = "rvsize";   // 0..1
     static constexpr const char* RV_MIX   = "rvmix";     // 0..1
@@ -75,3 +84,23 @@ namespace P
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+// Tempo-sync note divisions shared by the delay (same table as the other
+// Pastel engines' DSPEngine, so a groovebox host sees identical choices).
+namespace SyncDiv
+{
+    inline juce::StringArray delayNames() { return { "1/4", "1/8", "1/8 Dotted", "1/4 Triplet", "1/16", "1/2" }; }
+    inline double delayBeats(int div)
+    {
+        switch (div)
+        {
+            case 0: return 1.0;  case 1: return 0.5;  case 2: return 0.75;
+            case 3: return 2.0 / 3.0; case 4: return 0.25; case 5: return 2.0;
+            default: return 0.5;
+        }
+    }
+    inline float delayMs(int div, double bpm)
+    {
+        return (float)(delayBeats(div) * 60000.0 / (bpm > 20.0 ? bpm : 120.0));
+    }
+}

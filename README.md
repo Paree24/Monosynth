@@ -7,10 +7,15 @@
 Monosynth is a monophonic virtual-analog synthesizer: dual PolyBLEP VCOs
 (saw/triangle/square/pulse/sine) with ring modulation, white/pink noise and an
 osc-bus Thickness saturator, feeding a cascaded resonant **HPF → LPF** filter
-with drive (Early/Late models), dual ADSR envelopes, a tempo-syncable
+with drive (Early/Late models; resonance compresses with level, both HPF PEAK
+and LPF RES self-oscillate from silence), classic semi-modular envelopes (EG1 with DELAY, EG2
+with HOLD, plus decay / sustain), VCA initial gain for drones, a tempo-syncable
 modulation generator (triangle/saw/square/sine/S&H), portamento (legato/always),
-an 8-slot modulation matrix, multi-mode saturation (Tape/Tube/Fold/Fuzz), a
-master FX section (chorus, stereo delay, modulated algorithmic reverb), a
+an 8-slot modulation matrix, multi-mode saturation (Tape/Tube/Fold/Fuzz) with
+drive, thickness, filter and saturation running at 2x inside a halfband
+oversampler, a host-locked mono arpeggiator (gate, swing, latch), undo / redo,
+randomize / mutate with section locks, a master FX section (chorus, tempo-syncable
+stereo delay, modulated algorithmic reverb), a
 switchable master limiter, 356 factory presets as editable data files (never
 compiled in), user preset save/load with factory shadowing, and a full preset
 browser with search.

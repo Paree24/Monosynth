@@ -118,3 +118,18 @@ add_custom_target(MonoFactory ALL
     "${CMAKE_CURRENT_SOURCE_DIR}/Factory"
     "${CMAKE_CURRENT_BINARY_DIR}/Monosynth_artefacts/$<CONFIG>/VST3/Monosynth.vst3/Contents/Resources/Factory"
 )
+
+# HostCheck: loads the built .vst3 through JUCE's VST3 hosting (dev only)
+#   ./build/HostCheck_artefacts/Release/HostCheck build/Monosynth_artefacts/Release/VST3/Monosynth.vst3
+juce_add_console_app(HostCheck PRODUCT_NAME "HostCheck")
+target_sources(HostCheck PRIVATE Test/HostCheck.cpp)
+target_compile_definitions(HostCheck PRIVATE
+  JUCE_PLUGINHOST_VST3=1
+  JUCE_WEB_BROWSER=0
+  JUCE_USE_CURL=0
+)
+target_link_libraries(HostCheck PRIVATE
+  juce::juce_audio_utils
+  juce::juce_audio_processors
+)
+add_dependencies(HostCheck Monosynth_VST3)

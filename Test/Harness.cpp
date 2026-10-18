@@ -151,6 +151,140 @@ int main(int argc, char** argv)
         CHECK(std::abs(r1 - r2) / juce::jmax(1e-6, r1) < 0.02, "init is static (no wobble)");
     }
 
+    printf("--- envelope extras, VCA initial gain ---\n");
+    {
+        auto fresh = [] {
+            std::unique_ptr<MonoProcessor> q(new MonoProcessor());
+            q->setRateAndBufferSizeDetails(44100, 256);
+            q->prepareToPlay(44100.0, 256);
+            q->loadInit();
+            return q;
+        };
+        auto setP = [](MonoProcessor& q, const juce::String& id, float v) {
+            auto* prm = q.apvts.getParameter(id); prm->setValueNotifyingHost(prm->convertTo0to1(v));
+        };
+        // render `blocks` x 256, note on at block 0 and (optionally) off at block offAt; RMS per block
+        auto run = [](MonoProcessor& q, int blocks, int offAt) {
+            std::vector<float> lv;
+            juce::AudioBuffer<float> b(2, 256);
+            for (int k = 0; k < blocks; ++k)
+            {
+                juce::MidiBuffer m;
+                if (k == 0) m.addEvent(juce::MidiMessage::noteOn(1, 57, 0.9f), 0);
+                if (k == offAt) m.addEvent(juce::MidiMessage::noteOff(1, 57), 0);
+                b.clear(); q.processBlock(b, m);
+                double s = 0; for (int i = 0; i < 256; ++i) s += (double) b.getSample(0, i) * b.getSample(0, i);
+                lv.push_back((float) std::sqrt(s / 256));
+            }
+            return lv;
+        };
+        // EG1 delay: EG1 -> pitch; the pitch jump waits for the delay
+        {
+            auto q = fresh();
+            setP(*q, P::modSrcId(0), 2); setP(*q, P::modDstId(0), 1); setP(*q, P::modAmtId(0), 0.5f); // EG1 -> VCO1 +6 st
+            setP(*q, P::MIX_VCO1, 1.0f); setP(*q, P::VCO1_WAVE, 4); // sine
+            setP(*q, P::EG1_DELAY, 0.3f);
+            std::vector<float> all;
+            juce::AudioBuffer<float> b(2, 256);
+            for (int k = 0; k < 120; ++k)
+            {
+                juce::MidiBuffer m; if (k == 0) m.addEvent(juce::MidiMessage::noteOn(1, 57, 0.9f), 0);
+                b.clear(); q->processBlock(b, m);
+                for (int i = 0; i < 256; ++i) all.push_back(b.getSample(0, i));
+            }
+            auto zc = [&](int from, int len) { int z = 0; for (int i = from + 1; i < from + len; ++i) if ((all[(size_t) i - 1] < 0) != (all[(size_t) i] < 0)) ++z; return z * 44100.0 / (2.0 * len); };
+            double early = zc(2000, 8000), late = zc(20000, 8000);
+            printf("EG1 delay: %.1f Hz before, %.1f Hz after\n", early, late);
+            CHECK(std::abs(early - 220.0) < 8.0 && late > 290.0, "EG1 DELAY holds the envelope off, then it runs");
+        }
+        // EG2 hold: a short tap keeps sounding for the hold time
+        {
+            auto q = fresh();
+            setP(*q, P::EG2_S, 1.0f); setP(*q, P::EG2_R, 0.02f);
+            setP(*q, P::EG2_HOLD, 0.5f);
+            auto lv = run(*q, 160, 2);   // note off after ~12 ms
+            CHECK(lv[40] > 0.02f && lv[120] < 1e-4f, "EG2 HOLD keeps a tap open, then releases");
+        }
+        // VCA initial gain: drones with no key down
+        {
+            auto q = fresh();
+            setP(*q, P::VCA_INIT, 0.5f);
+            auto lv = run(*q, 400, 4);
+            CHECK(lv[399] > 0.01f, "VCA INITIAL gain drones after release");
+        }
+    }
+
+    printf("--- arp, undo, randomize ---\n");
+    {
+        juce::MessageManager::getInstance(); // undo records gestures made on the message thread (this one)
+        std::unique_ptr<MonoProcessor> q(new MonoProcessor());
+        q->setRateAndBufferSizeDetails(44100, 256);
+        q->prepareToPlay(44100.0, 256);
+        q->loadInit();
+        auto setP = [&](const juce::String& id, float v) {
+            auto* prm = q->apvts.getParameter(id); prm->setValueNotifyingHost(prm->convertTo0to1(v));
+        };
+        setP(P::ARP_ON, 1); setP(P::ARP_DIV, 6); setP(P::ARP_GATE, 0.5f); setP(P::EG2_R, 0.01f);
+        // free-running 1/16 at 120 BPM (no host): gaps between steps every 5512 samples
+        std::vector<float> lv;
+        juce::AudioBuffer<float> b(2, 256);
+        for (int k = 0; k < 200; ++k)
+        {
+            juce::MidiBuffer m;
+            if (k == 0) { m.addEvent(juce::MidiMessage::noteOn(1, 57, 0.9f), 0); m.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 0); }
+            b.clear(); q->processBlock(b, m);
+            lv.push_back(peakAbs(b));
+        }
+        int gaps = 0;
+        for (size_t k = 1; k < lv.size(); ++k) if (lv[k] < 1e-3f && lv[k - 1] >= 1e-3f) ++gaps;
+        printf("arp: %d gaps in %d blocks\n", gaps, (int) lv.size());
+        CHECK(gaps >= 8 && gaps <= 11, "arp plays gated 1/16 steps (about 9 in 1.16 s)");
+        setP(P::ARP_ON, 0);
+
+        auto* cut = q->apvts.getParameter(P::LPF_CUT);
+        const float before = cut->getValue();
+        cut->beginChangeGesture(); cut->setValueNotifyingHost(0.2f); cut->endChangeGesture();
+        q->undoEdit();
+        CHECK(std::abs(cut->getValue() - before) < 1e-5f, "undo a knob gesture");
+        q->redoEdit();
+        CHECK(std::abs(cut->getValue() - 0.2f) < 1e-5f, "redo it");
+
+        q->setGroupLocked(MonoProcessor::RG_FILTER, true);
+        const float vol = q->apvts.getRawParameterValue(P::VOLUME)->load();
+        const float vco1 = q->apvts.getRawParameterValue(P::MIX_VCO1)->load();
+        bool kept = true, moved = false;
+        for (int k = 0; k < 5; ++k)
+        {
+            q->randomize();
+            kept = kept && std::abs(cut->getValue() - 0.2f) < 1e-5f && q->apvts.getRawParameterValue(P::VOLUME)->load() == vol;
+            moved = moved || q->apvts.getRawParameterValue(P::MIX_VCO1)->load() != vco1;
+        }
+        CHECK(kept && moved && q->isGroupLocked(MonoProcessor::RG_ARP), "randomize: locked filter + volume untouched, arp locked by default");
+        const float m0 = q->apvts.getRawParameterValue(P::MIX_VCO1)->load();
+        q->undoEdit();
+        CHECK(q->apvts.getRawParameterValue(P::MIX_VCO1)->load() != m0, "randomize is one undo step");
+        juce::AudioBuffer<float> rb(2, 256); bool fin = true;
+        for (int k = 0; k < 60; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent(juce::MidiMessage::noteOn(1, 48, 0.9f), 0); rb.clear(); q->processBlock(rb, m); fin = fin && isFiniteBuffer(rb); }
+        CHECK(fin, "random patch renders finite");
+        {
+            const char* pitchIds[] = { P::VCO1_OCT, P::VCO2_OCT, P::VCO1_PITCH, P::VCO2_PITCH, P::VCO1_TUNE, P::VCO2_TUNE };
+            float before[6]; for (int k = 0; k < 6; ++k) before[k] = q->apvts.getRawParameterValue(pitchIds[k])->load();
+            bool same = true, noPitchRoute = true;
+            for (int n = 0; n < 20; ++n)
+            {
+                if (n & 1) q->mutate(); else q->randomize();
+                for (int k = 0; k < 6; ++k) same = same && q->apvts.getRawParameterValue(pitchIds[k])->load() == before[k];
+            }
+            q->randomize();
+            for (int k = 0; k < P::NMOD; ++k)
+            {
+                const int d = (int) std::round(q->apvts.getRawParameterValue(P::modDstId(k))->load());
+                noPitchRoute = noPitchRoute && d != 1 && d != 2;
+            }
+            CHECK(same && noPitchRoute, "randomize / mutate never touch pitch (octave, pitch, tune, pitch routes)");
+        }
+    }
+
     printf("--- creating processor ---\n");
     std::unique_ptr<MonoProcessor> proc(new MonoProcessor());
     CHECK(proc->getNumPrograms() == 356, "356 programs");
@@ -414,16 +548,19 @@ int main(int argc, char** argv)
         printf("res peak @cutoff: res0=%.3f res1=%.3f\n", pk0, pk1);
         CHECK(pk1 > pk0 * 3.0f, "resonance peak screams at cutoff");
         // ...while bass drops out as resonance rises (strong Early, mild Late)
+        // 100 Hz component only (correlation): at max res the filter also
+        // self-oscillates at the cutoff, which must not count as "bass"
         auto bassAt = [&](int model, float res) {
             MonoDSP::CascadeFilter ff; ff.prepare(44100.0); ff.setModel(model);
-            std::vector<float> out;
+            double re = 0.0, im = 0.0; int n = 0;
             for (int i = 0; i < 44100; ++i)
             {
-                float x = std::sin(2.0f * 3.14159265f * 100.0f * (float) i / 44100.0f) * 0.4f;
+                double ph = 2.0 * 3.14159265358979 * 100.0 * (double) i / 44100.0;
+                float x = (float) std::sin(ph) * 0.4f;
                 float y = ff.process(x, 10.0f, 0.0f, 800.0f, res, 0.0f);
-                if (i > 22050) out.push_back(y);
+                if (i >= 22050) { re += y * std::cos(ph); im += y * std::sin(ph); ++n; }
             }
-            return rmsOf(out);
+            return (float) (2.0 * std::sqrt(re * re + im * im) / n);
         };
         float eBass = bassAt(0, 1.0f) / juce::jmax(1e-6f, bassAt(0, 0.0f));
         float lBass = bassAt(1, 1.0f) / juce::jmax(1e-6f, bassAt(1, 0.0f));
@@ -447,6 +584,45 @@ int main(int argc, char** argv)
             printf("ping: peak=%.3f tail-rms=%.3f\n", peak, tailRms);
             CHECK(peak < 8.0f, "ping bounded");
             CHECK(tailRms > 0.02f, "filter self-oscillates");
+        }
+        // resonance compresses as level rises (saturation in the feedback path)
+        {
+            auto gainAt = [&](float amp) {
+                MonoDSP::CascadeFilter ff; ff.prepare(44100.0); ff.setModel(0);
+                std::vector<float> out;
+                for (int i = 0; i < 44100; ++i)
+                {
+                    float x = std::sin(2.0f * 3.14159265f * 1000.0f * (float) i / 44100.0f) * amp;
+                    float y = ff.process(x, 10.0f, 0.0f, 1000.0f, 0.8f, 0.0f);
+                    if (i > 22050) out.push_back(y);
+                }
+                return rmsOf(out) / amp;
+            };
+            float gQuiet = gainAt(0.02f), gLoud = gainAt(0.6f);
+            printf("res 0.8 gain @cutoff: quiet=%.2f loud=%.2f\n", gQuiet, gLoud);
+            CHECK(gQuiet > gLoud * 1.5f, "resonance compresses as level rises");
+        }
+        // whistles from silence: HPF PEAK alone, and a low LPF whistle that
+        // the bass-loss shelf must not eat
+        auto whistleRms = [&](float hc, float hp, float lc, float lr, int model) {
+            MonoDSP::CascadeFilter ff; ff.prepare(44100.0); ff.setModel(model);
+            std::vector<float> tail;
+            for (int i = 0; i < 44100 * 2; ++i)
+            {
+                float y = ff.process(0.0f, hc, hp, lc, lr, 0.0f);
+                if (i > 44100 * 2 - 11025) tail.push_back(y);
+            }
+            return rmsOf(tail);
+        };
+        {
+            float hpW = whistleRms(1000.0f, 1.0f, 19000.0f, 0.0f, 0);
+            float hpOff = whistleRms(1000.0f, 0.5f, 19000.0f, 0.0f, 0);
+            float lowW = whistleRms(10.0f, 0.0f, 120.0f, 1.0f, 0);
+            printf("silent input: HPF peak whistle=%.3f (peak 0.5: %.5f), 120 Hz LPF whistle=%.3f\n",
+                   hpW, hpOff, lowW);
+            CHECK(hpW > 0.1f, "HPF PEAK self-oscillates");
+            CHECK(hpOff < 1e-3f, "no whistle below the self-oscillation zone");
+            CHECK(lowW > 0.1f, "low LPF whistle survives the bass-loss shelf");
         }
         // stability torture: max res + max drive + sweeping cutoff, both models
         for (int m = 0; m < 2; ++m)

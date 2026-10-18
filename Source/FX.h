@@ -213,7 +213,8 @@ public:
     void process(float* L, float* R, int n, float timeMs, float fb, float mix)
     {
         if (mix <= 0.001f) return;
-        timeMs = juce::jlimit(20.0f, 1500.0f, timeMs);
+        // 1500 ms knob ceiling; tempo-synced divisions may reach the 2 s buffer
+        timeMs = juce::jlimit(20.0f, 1980.0f, timeMs);
         float samples = (float)(timeMs * sampleRate / 1000.0);
         if (smSamples < 0.0f) smSamples = samples;
         // glide the read head (~60 ms): time-knob moves pitch-bend the echoes

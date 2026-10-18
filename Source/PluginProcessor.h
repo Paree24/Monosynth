@@ -5,6 +5,8 @@
 #include "DSP.h"
 #include "FX.h"
 #include "Presets.h"
+#include "MidiArp.h"
+#include "SnapshotUndo.h"
 
 class MonoProcessor : public juce::AudioProcessor
 {
@@ -55,6 +57,29 @@ public:
     juce::ValueTree presetState();
     bool loadPresetState(const juce::ValueTree& vt);
 
+    // ---- undo / redo (message thread) ----
+    // Knob / switch gestures are one step each; preset loads, Init and
+    // randomize / mutate wrap their parameter writes in undoStep().
+    std::unique_ptr<SnapshotUndo::Transaction> undoStep()
+    {
+        return undo != nullptr ? std::make_unique<SnapshotUndo::Transaction>(*undo) : nullptr;
+    }
+    bool canUndo() const { return undo != nullptr && undo->canUndo(); }
+    bool canRedo() const { return undo != nullptr && undo->canRedo(); }
+    void undoEdit() { if (undo != nullptr) undo->undo(); }
+    void redoEdit() { if (undo != nullptr) undo->redo(); }
+
+    // ---- randomize / mutate with group locks (one undo step each) ----
+    // Never touched: volume, VCA level / initial gain, limiter, glide and
+    // bend / velocity settings (the playing feel). Arp is locked by default.
+    enum RandGroup { RG_VCO, RG_MIXER, RG_FILTER, RG_ENV, RG_MG, RG_MATRIX, RG_FX, RG_ARP, RG_COUNT };
+    static juce::StringArray randGroupNames() { return { "VCOs", "Mixer", "Filter", "Envelopes", "MG", "Matrix", "Effects", "Arp" }; }
+    static int paramGroup(const juce::String& id); // -1 = never randomized
+    bool isGroupLocked(int g) const { return (getRandLocks() >> g) & 1; }
+    void setGroupLocked(int g, bool locked);
+    void randomize();
+    void mutate(float amount = 0.04f); // a small nudge (normalised range)
+
 private:
     MonoDSP::SynthParams collectParams();
     void handleMidi(const juce::MidiMessage& msg, const MonoDSP::SynthParams& p);
@@ -73,11 +98,17 @@ private:
         std::atomic<float>* mgWave, *mgRate, *mgSync;
         std::atomic<float>* eg1a, *eg1d, *eg1s, *eg1r, *eg2a, *eg2d, *eg2s, *eg2r;
         std::atomic<float>* bendRange, *velSens;
-        std::atomic<float>* chOn, *chRate, *chDepth, *dlOn, *dlTime, *dlFb, *dlMix, *rvOn, *rvSize, *rvMix;
+        std::atomic<float>* eg1Delay, *eg2Hold, *vcaInit;
+        std::atomic<float>* arpOn, *arpMode, *arpDiv, *arpOct, *arpGate, *arpSwing, *arpLatch;
+        std::atomic<float>* chOn, *chRate, *chDepth, *dlOn, *dlTime, *dlFb, *dlMix, *dlSync, *dlDiv, *rvOn, *rvSize, *rvMix;
         std::atomic<float>* modSrc[P::NMOD], *modAmt[P::NMOD], *modDst[P::NMOD], *modTyp[P::NMOD];
     } pp {};
 
+    int getRandLocks() const { return (int) apvts.state.getProperty("randLocks", 1 << RG_ARP); }
+    std::unique_ptr<SnapshotUndo> undo;
+
     MonoDSP::MonoVoice voice;
+    MidiArp arp;
     MonoDSP::ModGen mg;
     MonoFX::ChorusFX chorus;
     MonoFX::DelayFX delay;

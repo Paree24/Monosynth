@@ -187,17 +187,90 @@ void AmountKnob::paint(juce::Graphics& g)
     g.setColour(MonoColors::textDim);
     g.fillEllipse(cx - 1.5f, cy - r - 1.0f, 3.0f, 3.0f);
 }
-void AmountKnob::mouseDown(const juce::MouseEvent& e) { dragStartY = e.getScreenY(); dragStartV = value; }
+juce::RangedAudioParameter* AmountKnob::param() const { return proc.apvts.getParameter(pid); }
+void AmountKnob::mouseDown(const juce::MouseEvent& e)
+{
+    dragStartY = e.getScreenY(); dragStartV = value;
+    if (auto* par = param()) { par->beginChangeGesture(); inGesture = true; }
+}
+void AmountKnob::mouseUp(const juce::MouseEvent&)
+{
+    if (inGesture) if (auto* par = param()) par->endChangeGesture();
+    inGesture = false;
+}
 void AmountKnob::mouseDrag(const juce::MouseEvent& e)
 {
     double dy = dragStartY - (double)e.getScreenY();
     float step = e.mods.isShiftDown() ? 0.002f : 0.008f;
     setValue(dragStartV + (float)(dy * step), true);
 }
-void AmountKnob::mouseDoubleClick(const juce::MouseEvent&) { setValue(0.0f, true); }
+void AmountKnob::mouseDoubleClick(const juce::MouseEvent&)
+{
+    // mouseDown already opened a gesture for this click; close it after the reset
+    auto* par = param();
+    if (par != nullptr && ! inGesture) par->beginChangeGesture();
+    setValue(0.0f, true);
+    if (par != nullptr && ! inGesture) par->endChangeGesture();
+}
+
+// ---------------- ValueKnob ----------------
+// MG sync divisions, same table as the processor's mgRateHz (cycles per beat)
+static const char* mgSyncNames[11] = { "1/1", "1/2D", "1/2", "1/4D", "1/2T", "1/4", "1/8D", "1/4T", "1/8", "1/8T", "1/16" };
+
+static juce::String fmtHz(float hz)
+{
+    return hz < 1000.0f ? juce::String(hz, hz < 10.0f ? 2 : (hz < 100.0f ? 1 : 0)) + " Hz"
+                        : juce::String(hz / 1000.0f, 2) + " kHz";
+}
+static juce::String fmtSecs(float t)
+{
+    return t < 1.0f ? juce::String((int)std::round(t * 1000.0f)) + " ms" : juce::String(t, 2) + " s";
+}
+static juce::String fmtSigned(float v, int dec, const char* unit)
+{
+    return (v > 0.0f ? "+" : "") + juce::String(v, dec) + unit;
+}
+
+juce::String ValueKnob::valueText() const
+{
+    const float v = (float)getValue();
+    auto flag = [&](const char* id) {
+        auto* r = proc.apvts.getRawParameterValue(id);
+        return r != nullptr && r->load() > 0.5f;
+    };
+    const juce::String id = pid;
+    if (id == P::HPF_CUT || id == P::LPF_CUT || id == P::CH_RATE) return fmtHz(v);
+    if (id == P::MG_RATE)
+    {
+        if (! flag(P::MG_SYNC)) return fmtHz(v);
+        int idx = juce::jlimit(0, 10, (int)std::round(juce::jmap(v, 0.05f, 30.0f, 0.0f, 1.0f) * 10.0f));
+        return mgSyncNames[idx];
+    }
+    if (id == P::EG1_A || id == P::EG1_D || id == P::EG1_R || id == P::EG2_A || id == P::EG2_D || id == P::EG2_R)
+        return fmtSecs(v);
+    if (id == P::EG1_DELAY || id == P::EG2_HOLD) return v <= 0.0005f ? juce::String("Off") : fmtSecs(v);
+    if (id == P::ARP_OCT) return juce::String((int)std::round(v)) + " oct";
+    if (id == P::PORTA) return v <= 0.001f ? juce::String("Off") : fmtSecs(0.002f + v * v * 0.6f);
+    if (id == P::DL_TIME) return juce::String((int)std::round(v)) + " ms";
+    if (id == P::VCO1_PITCH || id == P::VCO2_PITCH) return fmtSigned(v, 1, " st");
+    if (id == P::VCO1_TUNE || id == P::VCO2_TUNE) return fmtSigned((float)std::round(v), 0, " ct");
+    if (id == P::BEND_RANGE) return juce::String("+/-") + juce::String(v, 1) + " st";
+    if (id == P::VOLUME)
+        return v <= 0.0001f ? juce::String("-inf dB") : fmtSigned(20.0f * std::log10(v), 1, " dB");
+    // plain 0..x levels / amounts read as percent of their range
+    return juce::String((int)std::round(v * 100.0f)) + "%";
+}
+
+void ValueKnob::refresh()
+{
+    if (caption == nullptr) return;
+    caption->setText(hovered || dragging ? valueText() : captionName, juce::dontSendNotification);
+    caption->setColour(juce::Label::textColourId, hovered || dragging ? MonoColors::text : MonoColors::textDim);
+}
 
 // ---------------- MonoContent ----------------
-static const char* waveNames[5] = { "Saw", "Tri", "Sqr", "Pls", "Sin" };
+static const char* waveNames[5] = { "Saw", "Tri", "Sqr", "Pls", "Sin" };   // VCO_WAVE order
+static const char* mgWaveNames[5] = { "Tri", "Saw", "Sqr", "Sin", "S&H" }; // MG_WAVE order
 
 MonoContent::MonoContent(MonoProcessor& p) : proc(p)
 {
@@ -205,8 +278,10 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
 
     addAndMakeVisible(prevBtn); addAndMakeVisible(nextBtn);
     addAndMakeVisible(nameBtn); addAndMakeVisible(saveBtn);
-    addAndMakeVisible(initBtn);
-    for (auto* b : { &prevBtn, &nextBtn, &nameBtn, &saveBtn, &initBtn })
+    addAndMakeVisible(initBtn); addAndMakeVisible(panicBtn);
+    for (auto* b : { &undoBtn, &redoBtn, &randBtn, &mutateBtn, &locksBtn }) addAndMakeVisible(b);
+    for (auto* b : { &prevBtn, &nextBtn, &nameBtn, &saveBtn, &initBtn, &panicBtn,
+                     &undoBtn, &redoBtn, &randBtn, &mutateBtn, &locksBtn })
     {
         b->setLookAndFeel(&lnf);
         b->setColour(juce::TextButton::buttonColourId, MonoColors::raised);
@@ -230,7 +305,33 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     nameBtn.onClick = [&] { if (browser != nullptr) browser->setVisible(true); };
     saveBtn.onClick = [&] { if (browser != nullptr) browser->openForSave(); };
     initBtn.onClick = [&] { proc.loadInit(); refreshPresetName(); };
+    panicBtn.onClick = [&] { proc.panic(); };
+    undoBtn.onClick = [&] { proc.undoEdit(); refreshPresetName(); };
+    redoBtn.onClick = [&] { proc.redoEdit(); refreshPresetName(); };
+    randBtn.onClick = [&] { proc.randomize(); refreshPresetName(); };
+    mutateBtn.onClick = [&] { proc.mutate(); refreshPresetName(); };
+    locksBtn.onClick = [&]
+    {
+        // ticked = locked: RAND / MUTATE leave that section alone
+        juce::PopupMenu m;
+        m.addSectionHeader("Locked sections");
+        const auto names = MonoProcessor::randGroupNames();
+        for (int g = 0; g < MonoProcessor::RG_COUNT; ++g)
+            m.addItem(g + 1, names[g], true, proc.isGroupLocked(g));
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&locksBtn),
+                        [this](int id) { if (id > 0) proc.setGroupLocked(id - 1, ! proc.isGroupLocked(id - 1)); });
+    };
+    undoBtn.setTooltip("Undo the last change (Ctrl+Z)");
+    redoBtn.setTooltip("Redo (Ctrl+Shift+Z)");
+    randBtn.setTooltip("Random patch inside musical limits (unlocked sections only, one undo step)");
+    mutateBtn.setTooltip("Nudge the unlocked knobs a little (one undo step)");
+    locksBtn.setTooltip("Choose which sections RAND / MUTATE leave alone");
     nameBtn.setTooltip("Browse presets");
+    prevBtn.setTooltip("Previous preset");
+    nextBtn.setTooltip("Next preset");
+    saveBtn.setTooltip("Save the current sound as a user preset");
+    initBtn.setTooltip("Reset every control to the init patch");
+    panicBtn.setTooltip("Silence the voice, clear held notes and FX tails");
     refreshPresetName();
 
     volTop = addKnob(P::VOLUME, "", this, 0, 0, 40, 40);
@@ -277,7 +378,8 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     addChoice(P::FMODEL, gFilt, 191, 176, 120);
 
     auto* gVca = addGroup("VCA", 964, 64, 120, 252, MonoColors::yellow);
-    addKnob(P::VCA_LEVEL, "LEVEL", gVca, 28, 100, 64, 90);
+    addKnob(P::VCA_LEVEL, "LEVEL", gVca, 28, 34, 64, 84);
+    addKnob(P::VCA_INIT, "INITIAL", gVca, 28, 140, 64, 84)->setTooltip("Initial gain: the VCA stays open this much with no envelope (drones)");
 
     auto* gOut = addGroup("OUTPUT", 1092, 64, 180, 252, MonoColors::textDim);
     addKnob(P::VOLUME, "VOLUME", gOut, 58, 30, 64, 72);
@@ -288,27 +390,31 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     // ---- Panel 1 row 2 ----
     auto* gMg = addGroup("MODULATION GENERATOR", 8, 324, 224, 160, MonoColors::mint);
     addCaption("WAVEFORM", gMg, 10, 30, 204);
-    addWaveButtons(P::MG_WAVE, gMg, 18, 46);
+    addWaveButtons(P::MG_WAVE, gMg, 18, 46, 36, mgWaveNames);
     addKnob(P::MG_RATE, "RATE", gMg, 34, 80, 64, 72);
     addToggle(P::MG_SYNC, "SYNC", gMg, 118, 98, 80, 40);
 
-    auto* gEg1 = addGroup("ENVELOPE GENERATOR 1 (FILTER)", 240, 324, 372, 160, MonoColors::yellow);
-    addKnob(P::EG1_A, "ATTACK", gEg1, 12, 40, 72, 84);
-    addKnob(P::EG1_D, "DECAY", gEg1, 104, 40, 72, 84);
-    addKnob(P::EG1_S, "SUSTAIN", gEg1, 196, 40, 72, 84);
-    addKnob(P::EG1_R, "RELEASE", gEg1, 288, 40, 72, 84);
+    auto* gEg1 = addGroup("ENVELOPE GENERATOR 1 (PITCH / MOD)", 240, 324, 372, 160, MonoColors::yellow);
+    addKnob(P::EG1_DELAY, "DELAY", gEg1, 6, 40, 68, 84)->setTooltip("EG1 delay: the attack waits this long after the key goes down");
+    addKnob(P::EG1_A, "ATTACK", gEg1, 78, 40, 68, 84);
+    addKnob(P::EG1_D, "DECAY", gEg1, 150, 40, 68, 84);
+    addKnob(P::EG1_S, "SUSTAIN", gEg1, 222, 40, 68, 84)->setTooltip("Full sustain = the classic delay / attack / release EG1 shape");
+    addKnob(P::EG1_R, "RELEASE", gEg1, 294, 40, 68, 84);
 
-    auto* gEg2 = addGroup("ENVELOPE GENERATOR 2 (AMP)", 620, 324, 372, 160, MonoColors::yellow);
-    addKnob(P::EG2_A, "ATTACK", gEg2, 12, 40, 72, 84);
-    addKnob(P::EG2_D, "DECAY", gEg2, 104, 40, 72, 84);
-    addKnob(P::EG2_S, "SUSTAIN", gEg2, 196, 40, 72, 84);
-    addKnob(P::EG2_R, "RELEASE", gEg2, 288, 40, 72, 84);
+    auto* gEg2 = addGroup("ENVELOPE GENERATOR 2 (VCF / VCA)", 620, 324, 372, 160, MonoColors::yellow);
+    addKnob(P::EG2_HOLD, "HOLD", gEg2, 6, 40, 68, 84)->setTooltip("EG2 hold: the gate stays open at least this long, so a tap plays the whole envelope");
+    addKnob(P::EG2_A, "ATTACK", gEg2, 78, 40, 68, 84);
+    addKnob(P::EG2_D, "DECAY", gEg2, 150, 40, 68, 84);
+    addKnob(P::EG2_S, "SUSTAIN", gEg2, 222, 40, 68, 84);
+    addKnob(P::EG2_R, "RELEASE", gEg2, 294, 40, 68, 84);
 
     auto* gVel = addGroup("EXPRESS", 1000, 324, 272, 160, MonoColors::pink);
     addKnob(P::VELSENS, "VELOCITY", gVel, 12, 40, 72, 84);
     addKnob(P::BEND_RANGE, "BEND", gVel, 100, 40, 72, 84);
-    addCaption("GLIDE MODE", gVel, 180, 44, 84);
-    addChoice(P::GLIDE_MODE, gVel, 184, 62, 76); // centred on the knob row
+    addCaption("GLIDE MODE", gVel, 180, 36, 84);
+    addChoice(P::GLIDE_MODE, gVel, 184, 54, 76);
+    addCaption("NOISE TYPE", gVel, 180, 90, 84);
+    addChoice(P::NOISE_TYPE, gVel, 184, 108, 76);
     // ---- Panel 2: mod matrix ----
     auto* gMat = addGroup("MODULATION MATRIX", 8, 492, 760, 332, MonoColors::pink);
     const char* heads[5] = { "#", "SOURCE", "AMOUNT", "DESTINATION", "TYPE" };
@@ -370,16 +476,18 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
         cAtt.add(new juce::AudioProcessorValueTreeState::ComboBoxAttachment(proc.apvts, P::modTypeId(r), *tc));
     }
 
-    auto* gGlob = addGroup("GLOBAL", 776, 492, 200, 332, MonoColors::textDim);
-    // four evenly spaced blocks: caption + control, all on the centre line
-    addCaption("BEND RANGE", gGlob, 10, 47, 180);
-    addKnob(P::BEND_RANGE, "", gGlob, 68, 63, 64, 64);
-    addCaption("GLIDE TIME", gGlob, 10, 128, 180);
-    addKnob(P::PORTA, "", gGlob, 68, 144, 64, 64);
-    addCaption("GLIDE MODE", gGlob, 10, 209, 180);
-    addChoice(P::GLIDE_MODE, gGlob, 40, 225, 120);
-    addCaption("NOISE TYPE", gGlob, 10, 266, 180);
-    addChoice(P::NOISE_TYPE, gGlob, 40, 282, 120);
+    // arpeggiator (was GLOBAL: bend range, glide time / mode and noise type
+    // live in EXPRESS / OUTPUT)
+    auto* gArp = addGroup("ARPEGGIATOR", 776, 492, 200, 332, MonoColors::mint);
+    addToggle(P::ARP_ON, "ON", gArp, 20, 34, 76, 40);
+    addToggle(P::ARP_LATCH, "LATCH", gArp, 104, 34, 76, 40)->setTooltip("Keep the pattern going after the keys go up");
+    addCaption("MODE", gArp, 10, 88, 180);
+    addChoice(P::ARP_MODE, gArp, 40, 104, 120);
+    addCaption("DIVISION", gArp, 10, 138, 180);
+    addChoice(P::ARP_DIV, gArp, 40, 154, 120);
+    addKnob(P::ARP_OCT, "OCT", gArp, 6, 196, 60, 62);
+    addKnob(P::ARP_GATE, "GATE", gArp, 70, 196, 60, 62);
+    addKnob(P::ARP_SWING, "SWING", gArp, 134, 196, 60, 62);
 
     auto* gFx = addGroup("EFFECTS", 984, 492, 288, 332, MonoColors::textDim);
     // four rows on a shared grid: knobs in columns 1-3, switch/selector in
@@ -390,7 +498,7 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
             addCaption(t, gFx, 12, y0, 264)->setJustificationType(juce::Justification::centredLeft);
         };
         const int step = 74, kh = 52; // knob slider 36px + label; 10px air above next caption
-        auto knob = [&](const char* id, const char* lab, int col, int y0) { addKnob(id, lab, gFx, kx[col], y0 + 14, 60, kh); };
+        auto knob = [&](const char* id, const char* lab, int col, int y0) { return addKnob(id, lab, gFx, kx[col], y0 + 14, 60, kh); };
         int y0 = 30;
         rowCap("DISTORTION", y0);
         knob(P::SAT_AMT, "AMOUNT", 0, y0);
@@ -402,10 +510,15 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
         addToggle(P::CH_ON, "ON", gFx, rx, y0 + 22, rw, 36);
         y0 += step;
         rowCap("DELAY", y0);
-        knob(P::DL_TIME, "TIME", 0, y0);
+        dlTimeKnob = knob(P::DL_TIME, "TIME", 0, y0);
         knob(P::DL_FB, "FDBK", 1, y0);
         knob(P::DL_MIX, "MIX", 2, y0);
-        addToggle(P::DL_ON, "ON", gFx, rx, y0 + 22, rw, 36);
+        // synced: the division selector takes the TIME knob's place
+        dlDivBox = addChoice(P::DL_DIV, gFx, kx[0] - 2, y0 + 26, 64);
+        addToggle(P::DL_ON, "ON", gFx, rx, y0 + 22, rw / 2, 36);
+        auto* syncT = addToggle(P::DL_SYNC, "SYNC", gFx, rx + rw / 2, y0 + 22, rw / 2, 36);
+        syncT->setTooltip("Lock the delay time to the host tempo");
+        syncT->onClick = [this] { updateDelaySyncView(); };
         y0 += step;
         rowCap("REVERB", y0);
         knob(P::RV_SIZE, "SIZE", 0, y0);
@@ -420,6 +533,9 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     browser->onClose = [&] { browser->setVisible(false); };
     browser->onPresetChanged = [&] { refreshPresetName(); };
 
+    updateDelaySyncView();
+    undoBtn.setEnabled(proc.canUndo());
+    redoBtn.setEnabled(proc.canRedo());
     startTimerHz(4);
 }
 
@@ -445,7 +561,17 @@ void MonoContent::timerCallback()
             wi.btn->setToggleState(cur == wi.index, juce::dontSendNotification);
         }
     }
+    updateDelaySyncView();
     refreshPresetName();
+}
+
+void MonoContent::updateDelaySyncView()
+{
+    if (dlTimeKnob == nullptr || dlDivBox == nullptr) return;
+    auto* r = proc.apvts.getRawParameterValue(P::DL_SYNC);
+    bool synced = r != nullptr && r->load() > 0.5f;
+    dlTimeKnob->setVisible(! synced);
+    dlDivBox->setVisible(synced);
 }
 
 juce::GroupComponent* MonoContent::addGroup(const juce::String& title, int x, int y, int w, int h, juce::Colour accent)
@@ -471,10 +597,10 @@ juce::Label* MonoContent::addCaption(const juce::String& text, juce::Component* 
     return l;
 }
 
-juce::Slider* MonoContent::addKnob(const juce::String& param, const juce::String& label,
+ValueKnob* MonoContent::addKnob(const juce::String& param, const juce::String& label,
                                    juce::Component* parent, int x, int y, int w, int h)
 {
-    auto* s = new juce::Slider();
+    auto* s = new ValueKnob(proc, param);
     knobs.emplace_back(s);
     parent->addAndMakeVisible(s);
     s->setBounds(x, y, w, h - 16);
@@ -485,6 +611,7 @@ juce::Slider* MonoContent::addKnob(const juce::String& param, const juce::String
         proc.apvts.getParameter(param)->convertFrom0to1(
             proc.apvts.getParameter(param)->getDefaultValue()) : 0.5);
     sAtt.add(new juce::AudioProcessorValueTreeState::SliderAttachment(proc.apvts, param, *s));
+    if (auto* prm = proc.apvts.getParameter(param)) s->setTooltip(prm->getName(64));
     if (label.isNotEmpty())
     {
         auto* l = new juce::Label(param + "_l", label);
@@ -494,7 +621,10 @@ juce::Slider* MonoContent::addKnob(const juce::String& param, const juce::String
         l->setJustificationType(juce::Justification::centred);
         l->setColour(juce::Label::textColourId, MonoColors::textDim);
         l->setFont(lnf.uiFont(11.5f));
+        l->setInterceptsMouseClicks(false, false);
+        s->setCaption(l, label);
     }
+    else s->setPopupDisplayEnabled(true, true, this); // no caption: value bubble while dragging
     return s;
 }
 
@@ -525,11 +655,13 @@ juce::ToggleButton* MonoContent::addToggle(const juce::String& param, const juce
     return t;
 }
 
-void MonoContent::addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw)
+void MonoContent::addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw,
+                                 const char* const* names)
 {
+    if (names == nullptr) names = waveNames;
     for (int i = 0; i < 5; ++i)
     {
-        auto* b = new juce::TextButton(waveNames[i]);
+        auto* b = new juce::TextButton(names[i]);
         waveBtns.emplace_back(b);
         parent->addAndMakeVisible(b);
         b->setBounds(x + i * (bw + 2), y, bw, 24);
@@ -538,7 +670,11 @@ void MonoContent::addWaveButtons(const juce::String& param, juce::Component* par
         b->setRadioGroupId(param.hashCode());
         b->onClick = [&, i, param] {
             if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(param)))
+            {
+                par->beginChangeGesture();
                 par->setValueNotifyingHost(par->convertTo0to1((float)i));
+                par->endChangeGesture();
+            }
         };
         if (auto* par = proc.apvts.getParameter(param))
         {
@@ -563,7 +699,11 @@ void MonoContent::addOctButtons(const juce::String& param, juce::Component* pare
         b->setRadioGroupId(param.hashCode() + 99);
         b->onClick = [&, i, param] {
             if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(param)))
+            {
+                par->beginChangeGesture();
                 par->setValueNotifyingHost(par->convertTo0to1((float)i));
+                par->endChangeGesture();
+            }
         };
         if (auto* par = proc.apvts.getParameter(param))
         {
@@ -605,6 +745,13 @@ void MonoContent::resized()
     nextBtn.setBounds(x, 14, 32, 28);          x += 42;
     saveBtn.setBounds(x, 14, 60, 28);          x += 64;
     initBtn.setBounds(x, 14, 52, 28);
+    panicBtn.setBounds(getWidth() - 56 - 70, 14, 60, 28);
+    undoBtn.setBounds(196, 14, 50, 28);
+    redoBtn.setBounds(250, 14, 50, 28);
+    x += 62;
+    randBtn.setBounds(x, 14, 56, 28);          x += 60;
+    mutateBtn.setBounds(x, 14, 66, 28);        x += 70;
+    locksBtn.setBounds(x, 14, 58, 28);
     if (volTop != nullptr) volTop->setBounds(getWidth() - 56, 8, 40, 40);
     if (browser != nullptr)
         browser->setBounds(0, 0, baseW, baseH);
@@ -612,7 +759,7 @@ void MonoContent::resized()
 
 // ---------------- editor ----------------
 MonoEditor::MonoEditor(MonoProcessor& p)
-    : juce::AudioProcessorEditor(p), content(p),
+    : juce::AudioProcessorEditor(p), proc(p), content(p),
       corner(this, getConstrainer())
 {
     addAndMakeVisible(content);   // content first...
@@ -620,9 +767,22 @@ MonoEditor::MonoEditor(MonoProcessor& p)
     setSize(MonoContent::baseW, MonoContent::baseH); // size LAST (lesson: layout fires synchronously)
     setResizable(true, true);
     setResizeLimits(768, 500, 2048, 1332);
+    setWantsKeyboardFocus(true);
 }
 
 MonoEditor::~MonoEditor() {}
+
+bool MonoEditor::keyPressed(const juce::KeyPress& k)
+{
+    const auto m = k.getModifiers();
+    if (m.isCommandDown() && (k.getKeyCode() == 'Z' || k.getKeyCode() == 'z'))
+    {
+        if (m.isShiftDown()) proc.redoEdit(); else proc.undoEdit();
+        content.refreshPresetName();
+        return true;
+    }
+    return false;
+}
 
 void MonoEditor::paint(juce::Graphics& g) { g.fillAll(MonoColors::bg); }
 

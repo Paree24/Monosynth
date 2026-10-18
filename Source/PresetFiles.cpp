@@ -10,6 +10,7 @@ bool loadPresetFile(MonoProcessor& proc, const juce::File& file)
     if (xml == nullptr) return false;
     auto vt = juce::ValueTree::fromXml(*xml);
     if (! vt.isValid() || ! vt.hasType(proc.apvts.state.getType())) return false;
+    auto step = proc.undoStep(); // a whole preset load is one undo step
     return proc.loadPresetState(vt);
 }
 

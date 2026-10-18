@@ -44,9 +44,9 @@
   <PARAM id="mod2dst" value="5.00000000"/>
   <PARAM id="mod2src" value="2.00000000"/>
   <PARAM id="mod2typ" value="0.00000000"/>
-  <PARAM id="mod3amt" value="1.00000000"/>
-  <PARAM id="mod3dst" value="9.00000000"/>
-  <PARAM id="mod3src" value="3.00000000"/>
+  <PARAM id="mod3amt" value="0.00000000"/>
+  <PARAM id="mod3dst" value="0.00000000"/>
+  <PARAM id="mod3src" value="0.00000000"/>
   <PARAM id="mod3typ" value="1.00000000"/>
   <PARAM id="mod4amt" value="0.57767898"/>
   <PARAM id="mod4dst" value="9.00000000"/>
@@ -85,5 +85,5 @@
   <PARAM id="vco2tune" value="0.00000000"/>
   <PARAM id="vco2wave" value="4.00000000"/>
   <PARAM id="velsens" value="0.50000000"/>
-  <PARAM id="volume" value="0.44049999"/>
+  <PARAM id="volume" value="0.52539998"/>
 </MONO>

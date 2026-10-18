@@ -58,6 +58,7 @@ public:
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     float getValue() const { return value; }
     void setValue(float v, bool notify);
@@ -65,12 +66,36 @@ public:
     std::function<void(float)> onChange;
 private:
     void syncFromParam();
+    juce::RangedAudioParameter* param() const;
     MonoProcessor& proc;
     juce::String pid;
     MonoLNF& lnf;
     float value = 0.0f;
     double dragStartY = 0.0;
     float dragStartV = 0.0f;
+    bool inGesture = false; // begin/endChangeGesture bracket a drag (host automation + undo)
+};
+
+// Rotary knob whose caption turns into a live value readout while the knob is
+// hovered or dragged (name otherwise), so the panel stays calm at rest.
+class ValueKnob : public juce::Slider
+{
+public:
+    ValueKnob(MonoProcessor& p, const juce::String& paramId) : proc(p), pid(paramId) {}
+    void setCaption(juce::Label* l, const juce::String& name) { caption = l; captionName = name; }
+    juce::String valueText() const;
+    void mouseEnter(const juce::MouseEvent& e) override { juce::Slider::mouseEnter(e); hovered = true; refresh(); }
+    void mouseExit(const juce::MouseEvent& e) override { juce::Slider::mouseExit(e); hovered = false; refresh(); }
+    void valueChanged() override { refresh(); }
+    void startedDragging() override { dragging = true; refresh(); }
+    void stoppedDragging() override { dragging = false; refresh(); }
+    juce::String getTextFromValue(double) override { return valueText(); } // popup bubble (no caption)
+    void refresh();
+private:
+    MonoProcessor& proc;
+    juce::String pid, captionName;
+    juce::Label* caption = nullptr;
+    bool hovered = false, dragging = false;
 };
 
 class MonoContent : public juce::Component, private juce::Timer
@@ -84,20 +109,26 @@ public:
     static constexpr int baseW = 1280, baseH = 832;
 private:
     void timerCallback() override;
+    void updateDelaySyncView();
     juce::GroupComponent* addGroup(const juce::String& title, int x, int y, int w, int h, juce::Colour accent);
-    juce::Slider* addKnob(const juce::String& param, const juce::String& label, juce::Component* parent,
+    ValueKnob* addKnob(const juce::String& param, const juce::String& label, juce::Component* parent,
                           int x, int y, int w = 64, int h = 78);
     juce::Label* addCaption(const juce::String& text, juce::Component* parent, int x, int y, int w);
     juce::ComboBox* addChoice(const juce::String& param, juce::Component* parent, int x, int y, int w, int h = 24);
     juce::ToggleButton* addToggle(const juce::String& param, const juce::String& label, juce::Component* parent,
                                   int x, int y, int w, int h);
-    void addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 36);
+    void addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 36,
+                        const char* const* names = nullptr);
     void addOctButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 34);
     MonoProcessor& proc;
     MonoLNF lnf;
     juce::TextButton prevBtn { "<" }, nextBtn { ">" }, nameBtn { "Init Patch" };
-    juce::TextButton saveBtn { "SAVE" }, initBtn { "INIT" };
+    juce::TextButton saveBtn { "SAVE" }, initBtn { "INIT" }, panicBtn { "PANIC" };
+    juce::TextButton undoBtn { "UNDO" }, redoBtn { "REDO" };
+    juce::TextButton randBtn { "RAND" }, mutateBtn { "MUTATE" }, locksBtn { "LOCKS" };
     juce::Slider* volTop = nullptr;
+    ValueKnob* dlTimeKnob = nullptr;      // hidden while the delay is tempo-synced...
+    juce::ComboBox* dlDivBox = nullptr;   // ...and this division selector shown instead
     std::vector<std::unique_ptr<juce::GroupComponent>> groups;
     std::vector<std::unique_ptr<juce::Slider>> knobs;
     std::vector<std::unique_ptr<juce::Label>> labels;
@@ -121,7 +152,10 @@ public:
     ~MonoEditor() override;
     void paint(juce::Graphics& g) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress&) override; // Ctrl/Cmd+Z undo, +Shift redo
 private:
+    MonoProcessor& proc;
     MonoContent content;
     juce::ResizableCornerComponent corner;
+    juce::TooltipWindow tooltips { this, 600 }; // hover help for every control with a tooltip
 };

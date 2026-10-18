@@ -58,7 +58,9 @@ inline float oscSample(int wave, double phase, float pw, double dt)
 class EnvADSR
 {
 public:
-    void setSampleRate(double sr) { sampleRate = sr; att = -1.0f; }
+    // invalidate every cached time so the next setParams() rebuilds all
+    // coefficients for the new rate (not just the attack)
+    void setSampleRate(double sr) { sampleRate = sr; att = dec = rel = -1.0f; }
     // Cheap to call every block: coefficients are only recomputed on change,
     // so knob moves reach held notes (sustain/release apply immediately).
     void setParams(float a, float d, float s, float r)
@@ -66,24 +68,59 @@ public:
         a = std::max(a, 0.001f); d = std::max(d, 0.002f);
         s = juce::jlimit(0.0f, 1.0f, s); r = std::max(r, 0.005f);
         const float sr = (float)sampleRate;
-        if (a != att) { att = a; ka = 1.0f - std::exp(-3.0f / (att * sr)); }
+        // attack charges toward kAttackAim (above the 1.0 peak) and stops at
+        // 1.0, like the analog EG's capacitor aimed at a higher rail: a near-
+        // linear rise that reaches the peak in exactly the attack time
+        if (a != att)
+        {
+            att = a;
+            const float tau = att / std::log(kAttackAim / (kAttackAim - 1.0f));
+            ka = 1.0f - std::exp(-1.0f / (tau * sr));
+        }
         if (d != dec) { dec = d; kd = 1.0f - std::exp(-3.0f / (dec * sr)); }
         if (r != rel) { rel = r; kr = std::exp(-3.0f / (rel * sr)); }
         sus = s;
         if (state == State::Sustain) level = sus;
     }
-    void noteOn() { state = State::Attack; }
-    void noteOff() { if (state != State::Idle) state = State::Release; }
-    void reset() { state = State::Idle; level = 0.0f; }
+    // envelope extras (both 0 = a plain ADSR): EG1 DELAY holds the attack off
+    // after the gate opens; EG2 HOLD keeps the gate open for at least that
+    // long, so a short tap still runs the whole envelope.
+    void setDelayHold(float delaySec, float holdSec)
+    {
+        delaySamps = (int) (std::max(0.0f, delaySec) * sampleRate);
+        holdSamps = (int) (std::max(0.0f, holdSec) * sampleRate);
+    }
+    void noteOn()
+    {
+        holdLeft = holdSamps;
+        releasePending = false;
+        if (delaySamps > 0) { delayLeft = delaySamps; state = State::Delay; }
+        else state = State::Attack;
+    }
+    void noteOff()
+    {
+        if (state == State::Idle) return;
+        if (holdLeft > 0) { releasePending = true; return; } // hold: release when it runs out
+        state = State::Release;
+    }
+    void reset() { state = State::Idle; level = 0.0f; holdLeft = 0; releasePending = false; }
     bool isActive() const { return state != State::Idle; }
     inline float next()
     {
+        if (holdLeft > 0 && --holdLeft == 0 && releasePending && state != State::Idle)
+        {
+            releasePending = false;
+            state = State::Release;
+        }
         switch (state)
         {
             case State::Idle: return 0.0f;
+            case State::Delay:
+                if (--delayLeft <= 0) state = State::Attack;
+                return level; // the output waits where it is (0 from rest)
             case State::Attack:
-                level += (1.0f - level) * ka;
-                if ((1.0f - level) < 0.005f) state = State::Decay;
+                level += (kAttackAim - level) * ka;
+                if (level >= 1.0f) { level = 1.0f; state = State::Decay; }
                 return level;
             case State::Decay:
                 level += (sus - level) * kd;
@@ -98,7 +135,10 @@ public:
         return 0.0f;
     }
 private:
-    enum class State { Idle, Attack, Decay, Sustain, Release };
+    enum class State { Idle, Delay, Attack, Decay, Sustain, Release };
+    static constexpr float kAttackAim = 1.3f;
+    int delaySamps = 0, holdSamps = 0, delayLeft = 0, holdLeft = 0;
+    bool releasePending = false;
     State state = State::Idle;
     double sampleRate = 44100.0;
     float att = -1.0f, dec = -1.0f, sus = 0.7f, rel = -1.0f, level = 0.0f;
@@ -140,19 +180,25 @@ private:
 //
 // Captured behaviors (own clean-room formulation, no vendor code):
 //  - two gm-C integrator stages per section, solved with a Zavalishin TPT
-//    linear pass plus a relaxation pass where the resonance feedback goes
-//    through the OTA tanh transfer (linear response exact at small signals,
-//    compressive scream at large signals);
+//    linear pass plus a relaxation pass where the resonance is a positive
+//    feedback of the bandpass node through the OTA tanh transfer, around a
+//    fixed Q = 0.5 damping (k = 2 - r). Linear response is exact at small
+//    signals; as level rises the feedback compresses, the effective damping
+//    grows and the resonance tames itself instead of running away;
 //  - log-taper resonance pot (matches the A100k hardware taper);
 //  - resonance steals bass (strong on Early, mild on Late) via a
-//    Q-dependent subtraction of the lowpassed output;
+//    Q-dependent subtraction of the lowpassed output, with the shelf corner
+//    kept below the cutoff so low resonant whistles survive;
 //  - low input headroom (stages overdrive easily, like the hardware);
-//  - loop sustains into self-oscillation whistle at maximum resonance,
-//    amplitude-bounded by the OTA saturation.
+//  - past the self-oscillation point the linear loop gain exceeds unity, a
+//    whisper of circuit noise inside each section starts it, and the OTA
+//    saturation sets the whistle amplitude (both HPF PEAK and LPF RES sing).
 struct OTASection
 {
     void reset() { ic1 = ic2 = 0.0f; }
-    inline void step(float x, float g, float k, float satG,
+    // k: linear damping (2 = no resonance, < 0 = self-oscillating),
+    // nz: circuit noise injected into the bandpass integrator
+    inline void step(float x, float g, float k, float satG, float nz,
                      float& outLP, float& outHP)
     {
         float a1 = 1.0f / (1.0f + g * (g + k));
@@ -162,22 +208,21 @@ struct OTASection
         float v3 = x - ic2;
         float v1 = a1 * ic1 + a2 * v3;
         // pass 2: OTA-saturated resonance feedback (one relaxation pass).
-        // The stage output clips first (OTA voltage swing), then the
-        // resistor network scales it: fb = k * sat(v1). tanh(u)/u -> 1 for
-        // small u, so small-signal response is unchanged; large resonant
-        // swings compress the feedback and the loop sings instead of
-        // clipping. Integrator states are deliberately NOT clamped (that
+        // The resonance path r*v1 (r = 2 - k) clips first (OTA voltage
+        // swing): the input sees r*(v1 - sat(v1)) of extra damping, which is
+        // zero for small v1 and grows with level, so loud resonant swings
+        // compress. Integrator states are deliberately NOT clamped (that
         // would strangle the resonance); a far-off numerical safety net
         // below only catches pathological blowups.
-        float fbLin = k * v1;
-        float fb = k * std::tanh(v1 * satG) / satG;
-        float v3b = x - ic2 - (fb - fbLin);
+        float r = 2.0f - k;
+        float xe = x - r * (v1 - std::tanh(v1 * satG) / satG);
+        float v3b = xe - ic2;
         v1 = a1 * ic1 + a2 * v3b;
         float v2 = ic2 + a2 * ic1 + a3 * v3b;
-        ic1 = juce::jlimit(-16.0f, 16.0f, 2.0f * v1 - ic1);
+        ic1 = juce::jlimit(-16.0f, 16.0f, 2.0f * v1 - ic1 + nz);
         ic2 = juce::jlimit(-16.0f, 16.0f, 2.0f * v2 - ic2);
         outLP = v2;
-        outHP = x - k * v1 - v2;
+        outHP = xe - k * v1 - v2;
     }
     float ic1 = 0.0f, ic2 = 0.0f;
 };
@@ -189,7 +234,7 @@ static inline float resQ(float r, int model) // log-taper pot -> stage Q
     return 0.5f + t * qmax;
 }
 
-// Self-oscillation zone: damping fades toward 5% over the last stretch of
+// Self-oscillation zone: damping fades through zero over the last stretch of
 // the pot instead of stepping at a threshold (a hard step made the resonance
 // jump audibly as a smoothed knob or the mod matrix crossed it).
 static inline float whistleAmt(float r)
@@ -197,7 +242,11 @@ static inline float whistleAmt(float r)
     float t = juce::jlimit(0.0f, 1.0f, (r - 0.95f) / 0.035f);
     return t * t * (3.0f - 2.0f * t);
 }
-static inline float resK(float r, int model) { return (1.0f / resQ(r, model)) * (1.0f - 0.95f * whistleAmt(r)); }
+static inline float resK(float r, int model)
+{
+    float w = whistleAmt(r);
+    return (1.0f / resQ(r, model)) * (1.0f - 0.95f * w) - 0.15f * w;
+}
 
 
 class CascadeFilter
@@ -206,18 +255,35 @@ public:
     void prepare(double sr)
     {
         sampleRate = sr; reset();
-        // bass-loss tracker: one pole at 300 Hz, updated once per host sample
-        gBass = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 300.0f / (float)sr);
     }
     void reset() { hpSec.reset(); lpSec.reset(); blp = 0.0f; }
     void setModel(int m) { model = juce::jlimit(0, 1, m); }
 
-    // Full cascade: returns filtered sample. All cutoffs in Hz, peaks 0..1.
-    inline float process(float x, float hpfCut, float hpfPeak, float lpfCut,
-                         float lpfRes, float drive)
+    // Once per host sample: cutoffs in Hz, peaks 0..1. The core then runs at
+    // twice the host rate (tick() is called twice per host sample).
+    inline void setControls(float hpfCut, float hpfPeak, float lpfCut, float lpfRes)
     {
         float fcH = juce::jlimit(10.0f, 18000.0f, hpfCut);
         float fcL = juce::jlimit(20.0f, 19000.0f, lpfCut);
+        kH = resK(hpfPeak, model); kL = resK(lpfRes, model);
+        wH = whistleAmt(hpfPeak); wL = whistleAmt(lpfRes);
+        float sr2 = (float)sampleRate * 2.0f;
+        gH = juce::jmin(std::tan(juce::MathConstants<float>::pi * fcH / sr2), 7.0f);
+        gL = juce::jmin(std::tan(juce::MathConstants<float>::pi * fcL / sr2), 7.0f);
+        // OTA transfer hardness per model: Early clips harder, Late softer
+        // (louder, cleaner whistle). Low-resonance settings stay linear.
+        satG = model == 0 ? 0.6f : 0.45f;
+        // resonance steals bass (strong on Early, mild on Late); the shelf
+        // corner follows the cutoff (300 Hz, or 0.3x cutoff when lower) so it
+        // never lands on top of a low resonant peak
+        bassK = (model == 0 ? 0.8f : 0.35f) * lpfRes * lpfRes;
+        float wB = 2.0f * juce::MathConstants<float>::pi * juce::jmin(300.0f, 0.3f * fcL) / sr2;
+        gBass = wB / (1.0f + wB);
+    }
+
+    // One oversampled-rate step of the cascade (input drive -> HPF -> LPF).
+    inline float tick(float x, float drive)
+    {
         // low headroom input stage: overdrives easily, like the hardware.
         // Transparent when drive is at 0.
         if (drive > 0.001f)
@@ -225,41 +291,31 @@ public:
             float dg = 1.0f + drive * 9.0f;
             x = std::tanh(x * dg) / (1.0f + drive * 1.5f);
         }
-
-        // self-oscillation zone: damping drops toward zero and circuit noise
-        // keeps the loop singing (like the hardware whistle with no input)
-        float kH = resK(hpfPeak, model), kL = resK(lpfRes, model);
-        float whistle = juce::jmax(whistleAmt(hpfPeak), whistleAmt(lpfRes));
-        // 2x internal: step at double rate, hold input, average sub-outputs
-        float sr2 = (float)sampleRate * 2.0f;
-        float gH = juce::jmin(std::tan(juce::MathConstants<float>::pi * fcH / sr2), 7.0f);
-        float gL = juce::jmin(std::tan(juce::MathConstants<float>::pi * fcL / sr2), 7.0f);
-        // OTA transfer hardness per model: Early clips harder, Late softer.
-        // Kept gentle enough that low-resonance settings stay linear (scope-
-        // clean); the huge resonant swings still compress deeply and scream.
-        float satG = model == 0 ? 1.2f : 0.9f;
-
-        float lp1, hp1, lp2, hp2, dummy;
-        hpSec.step(x,  gH, kH, satG, dummy, hp1);
-        hpSec.step(x,  gH, kH, satG, dummy, hp2);
-        float h = (hp1 + hp2) * 0.5f;
-        if (whistle > 0.0f) // circuit-noise excitation in the whistle zone
-        {
-            whState = whState * 1664525u + 1013904223u;
-            h += ((float)(whState >> 16) / 32768.0f - 1.0f) * 0.02f * whistle;
-        }
-        lpSec.step(h,  gL, kL, satG, lp1, dummy);
-        lpSec.step(h,  gL, kL, satG, lp2, dummy);
-        float y = (lp1 + lp2) * 0.5f;
-        // resonance steals bass (strong on Early, mild on Late)
+        float nzH = wH > 0.0f ? circuitNoise() * wH : 0.0f;
+        float nzL = wL > 0.0f ? circuitNoise() * wL : 0.0f;
+        float lp, h, dummy;
+        hpSec.step(x, gH, kH, satG, nzH, dummy, h);
+        lpSec.step(h, gL, kL, satG, nzL, lp, dummy);
+        float y = lp;
         // (tracker always runs so it never restarts from a stale value when
         // resonance is swept up from zero)
-        float bassK = (model == 0 ? 0.8f : 0.35f) * lpfRes * lpfRes;
         blp += gBass * (y - blp);
         if (bassK > 0.001f) y -= bassK * blp;
         y = 3.0f * std::tanh(y / 3.0f); // high rails: clean when calm, clips when screaming
         if (! std::isfinite(y)) { reset(); return 0.0f; }
         return y;
+    }
+
+    // Host-rate convenience: holds the input for both oversampled steps and
+    // averages them (tests and simple callers; the voice feeds tick() from
+    // its own 2x upsampler).
+    inline float process(float x, float hpfCut, float hpfPeak, float lpfCut,
+                         float lpfRes, float drive)
+    {
+        setControls(hpfCut, hpfPeak, lpfCut, lpfRes);
+        float a = tick(x, drive);
+        float b = tick(x, drive);
+        return (a + b) * 0.5f;
     }
 
     // Single-section access for tests (uses host-rate single step).
@@ -270,7 +326,7 @@ public:
         g = juce::jmin(g, 7.0f);
         float k = resK(peak, model);
         float outLP, outHP;
-        hpSec.step(x, g, k, 1.2f, outLP, outHP);
+        hpSec.step(x, g, k, 0.6f, 0.0f, outLP, outHP);
         return outHP;
     }
     float processLP(float x, float cutoff, float res)
@@ -280,16 +336,73 @@ public:
         g = juce::jmin(g, 7.0f);
         float k = resK(res, model);
         float outLP, outHP;
-        lpSec.step(x, g, k, 1.2f, outLP, outHP);
+        lpSec.step(x, g, k, 0.6f, 0.0f, outLP, outHP);
         return outLP;
     }
 
 private:
+    // tiny white circuit noise (-60 dB): only fed in near self-oscillation,
+    // enough to start the whistle from silence, far below audibility
+    inline float circuitNoise()
+    {
+        whState = whState * 1664525u + 1013904223u;
+        return ((float)(whState >> 16) / 32768.0f - 1.0f) * 1.0e-3f;
+    }
     double sampleRate = 44100.0;
     int model = 0;
     OTASection hpSec, lpSec;
-    float blp = 0.0f, gBass = 0.04f; // bass-loss tracker state + coefficient
-    juce::uint32 whState = 22222u; // whistle-zone noise source
+    float gH = 0.01f, gL = 0.1f, kH = 2.0f, kL = 2.0f, wH = 0.0f, wL = 0.0f, satG = 0.6f;
+    float blp = 0.0f, gBass = 0.02f, bassK = 0.0f; // bass-loss tracker state + coefficients
+    juce::uint32 whState = 22222u; // circuit-noise source
+};
+
+// ---------------- 2x oversampling (halfband FIR pair) ----------------
+// Up: zero-stuff + lowpass at the 2x rate; down: lowpass + keep every second
+// sample. 63-tap Blackman-windowed sinc, cutoff at the host Nyquist: flat to
+// ~0.4 fs, about -75 dB images/aliases, 31 host samples of delay overall.
+struct HalfbandOS
+{
+    static constexpr int N = 63;
+    void prepare()
+    {
+        const int M = (N - 1) / 2;
+        double sum = 0.0;
+        for (int i = 0; i < N; ++i)
+        {
+            const double n = i - M;
+            const double sinc = n == 0 ? 0.5 : std::sin(juce::MathConstants<double>::pi * 0.5 * n) / (juce::MathConstants<double>::pi * n);
+            const double w = 0.42 - 0.5 * std::cos(2.0 * juce::MathConstants<double>::pi * i / (N - 1))
+                           + 0.08 * std::cos(4.0 * juce::MathConstants<double>::pi * i / (N - 1));
+            h[i] = (float) (sinc * w);
+            sum += h[i];
+        }
+        for (auto& c : h) c = (float) (c / sum);
+        reset();
+    }
+    void reset() { std::fill(std::begin(up), std::end(up), 0.0f); std::fill(std::begin(dn), std::end(dn), 0.0f); upPos = dnPos = 0; }
+    // one host sample in, two 2x-rate samples out
+    inline void upsample(float x, float& y0, float& y1)
+    {
+        push(up, upPos, 2.0f * x); y0 = conv(up, upPos);
+        push(up, upPos, 0.0f);     y1 = conv(up, upPos);
+    }
+    // two 2x-rate samples in, one host sample out
+    inline float downsample(float x0, float x1)
+    {
+        push(dn, dnPos, x0);
+        push(dn, dnPos, x1);
+        return conv(dn, dnPos);
+    }
+private:
+    static inline void push(float* buf, int& pos, float x) { pos = (pos + 1) % N; buf[pos] = x; }
+    inline float conv(const float* buf, int pos) const
+    {
+        float acc = 0.0f;
+        for (int i = 0; i < N; ++i) acc += h[i] * buf[(pos - i + N) % N];
+        return acc;
+    }
+    float h[N] {}, up[N] {}, dn[N] {};
+    int upPos = 0, dnPos = 0;
 };
 
 // ---------------- Saturation: multi-mode output distortion ----------------
@@ -360,6 +473,9 @@ struct SynthParams
     float bendRange = 2.0f, velSens = 0.5f;
     bool chOn = false; float chRate = 0.6f, chDepth = 0.4f;
     bool dlOn = false; float dlTime = 350.0f, dlFb = 0.35f, dlMix = 0.25f;
+    bool dlSync = false; int dlDiv = 1;
+    float eg1Delay = 0.0f, eg2Hold = 0.0f; // EG1 DELAY / EG2 HOLD (s)
+    float vcaInit = 0.0f;                   // VCA initial gain: drones at this level
     bool rvOn = false; float rvSize = 0.5f, rvMix = 0.25f;
     std::array<ModRoute, 8> routes {};
     float pitchBend = 0.0f; // semitones, smoothed
@@ -397,7 +513,9 @@ public:
     {
         sampleRate = sr;
         eg1.setSampleRate(sr); eg2.setSampleRate(sr);
+        glideKnob = -1.0f; // glide coefficient is rate-dependent: rebuild on next render
         filt.prepare(sr);
+        os.prepare();
         rng.setSeedRandomly();
         pink.reset();
     }
@@ -407,19 +525,22 @@ public:
     {
         bool wasActive = active;
         note = midiNote; velocity = vel; active = true; gated = true;
-        float target = (float)midiNote + p.pitchBend;
+        float target = (float)midiNote; // bend is added after the glide slew
         if (! glide) { curMidi = target; targetMidi = target; }
         else targetMidi = target;
         if (! wasActive)
         {
             ph1 = rng.nextFloat(); ph2 = rng.nextFloat();
             filt.reset();
+            os.reset();
             randomHold = rng.nextFloat() * 2.0f - 1.0f;
             slopCut = 1.0f + (rng.nextFloat() * 2.0f - 1.0f) * 0.02f;
             clickCount = 0;
         }
         eg1.setParams(p.eg1a, p.eg1d, p.eg1s, p.eg1r);
         eg2.setParams(p.eg2a, p.eg2d, p.eg2s, p.eg2r);
+        eg1.setDelayHold(p.eg1Delay, 0.0f);
+        eg2.setDelayHold(0.0f, p.eg2Hold);
         if (retrigger) { eg1.noteOn(); eg2.noteOn(); }
     }
     void noteOff() { gated = false; eg1.noteOff(); eg2.noteOff(); }
@@ -428,6 +549,8 @@ public:
     {
         eg1.setParams(p.eg1a, p.eg1d, p.eg1s, p.eg1r);
         eg2.setParams(p.eg2a, p.eg2d, p.eg2s, p.eg2r);
+        eg1.setDelayHold(p.eg1Delay, 0.0f);
+        eg2.setDelayHold(0.0f, p.eg2Hold);
     }
     void kill() { active = false; eg1.reset(); eg2.reset(); }
     void setTarget(float m) { targetMidi = m; }
@@ -452,12 +575,17 @@ public:
         float e1 = eg1.next();
         float e2 = eg2.next();
         outEg1 = e1; outEg2 = e2;
-        if (! eg1.isActive() && ! eg2.isActive() && ! gated)
+        // VCA initial gain drones on with no envelope at all; only a
+        // closed VCA lets the voice go idle
+        if (! eg1.isActive() && ! eg2.isActive() && ! gated && p.vcaInit <= 0.001f)
         { active = false; lastSample = 0.0f; return 0.0f; }
 
         // ---- modulation sources ----
+        // pitch bend rides on top of the glide: the wheel never gets slewed by
+        // portamento (the bend is a direct pitch CV, not a key CV)
+        const float pitchMidi = curMidi + p.pitchBend;
         // follows the gliding pitch, so key-tracked cutoff slides with portamento
-        float keyTrk = juce::jlimit(-1.0f, 1.0f, (curMidi - 60.0f) / 36.0f);
+        float keyTrk = juce::jlimit(-1.0f, 1.0f, (pitchMidi - 60.0f) / 36.0f);
         float srcVals[11] = {};
         srcVals[1] = mgVal; srcVals[2] = e1; srcVals[3] = e2;
         srcVals[4] = velocity; srcVals[5] = aftertouch; srcVals[6] = keyTrk;
@@ -498,8 +626,8 @@ public:
 
         float semi1 = p.vco1pitch + p.vco1tune / 100.0f + mPitch1;
         float semi2 = p.vco2pitch + p.vco2tune / 100.0f + mPitch2;
-        double f1 = (double)midiToFreq(curMidi + semi1) * rangeMult(p.vco1oct);
-        double f2 = (double)midiToFreq(curMidi + semi2) * rangeMult(p.vco2oct);
+        double f1 = (double)midiToFreq(pitchMidi + semi1) * rangeMult(p.vco1oct);
+        double f2 = (double)midiToFreq(pitchMidi + semi2) * rangeMult(p.vco2oct);
         f1 = juce::jlimit(1.0, 18000.0, f1); f2 = juce::jlimit(1.0, 18000.0, f2);
         double dt1 = f1 / sampleRate, dt2 = f2 / sampleRate;
         ph1 += dt1; if (ph1 >= 1.0) ph1 -= 1.0;
@@ -510,16 +638,6 @@ public:
         float nz = p.noiseType == 0 ? (rng.nextFloat() * 2.0f - 1.0f) * 0.6f : pink.next(rng);
 
         float mixed = s1 * p.mix1 + s2 * p.mix2 + ringS * p.ring + nz * p.noise;
-        // osc-bus soft saturation ("thickness"): rounds the summed waves into
-        // each other and blooms harmonics. Transparent at 0.
-        if (p.thick > 0.001f)
-        {
-            float t = juce::jlimit(0.0f, 1.0f, p.thick);
-            float y = std::tanh(mixed * (1.0f + 4.0f * t));
-            y = y / (1.0f + 0.9f * t) + 0.06f * t * y * y;
-            mixed = y;
-        }
-        mixed *= 0.65f;
 
         float hCut = juce::jlimit(10.0f, 18000.0f,
             p.hpfCut * std::pow(2.0f, mHpfOct) * slopCut);
@@ -528,17 +646,36 @@ public:
         float hPk = juce::jlimit(0.0f, 1.0f, p.hpfPeak + mHpfPk);
         float lRs = juce::jlimit(0.0f, 1.0f, p.lpfRes + mLpfRs);
 
-        float y = filt.process(mixed, hCut, hPk, lCut, lRs, p.drive);
-
         float ampVel = (1.0f - 0.7f * p.velSens) + 0.7f * p.velSens * velocity;
         float vcaM = juce::jlimit(0.0f, 1.5f, p.vca + mVca);
+        // VCA control = EG2 + initial gain, capped at fully open
+        const float vcaCv = juce::jmin(1.0f, e2 + p.vcaInit);
+        const float gain = vcaCv * ampVel * vcaM;
         float clickG = 1.0f;
         if (clickCount < 96)
         {
             clickG = 0.5f - 0.5f * std::cos(juce::MathConstants<float>::pi * (float)clickCount / 96.0f);
             ++clickCount;
         }
-        lastSample = sat.process(y * e2 * ampVel * vcaM, p.satAmt, p.satType) * clickG;
+
+        // nonlinear core at 2x: thickness -> drive + filter cascade -> VCA ->
+        // saturation, between a halfband upsampler and decimator
+        filt.setControls(hCut, hPk, lCut, lRs);
+        float u[2];
+        os.upsample(mixed, u[0], u[1]);
+        for (auto& m : u)
+        {
+            // osc-bus soft saturation ("thickness"): rounds the summed waves
+            // into each other and blooms harmonics. Transparent at 0.
+            if (p.thick > 0.001f)
+            {
+                float t = juce::jlimit(0.0f, 1.0f, p.thick);
+                float y = std::tanh(m * (1.0f + 4.0f * t));
+                m = y / (1.0f + 0.9f * t) + 0.06f * t * y * y;
+            }
+            m = sat.process(filt.tick(m * 0.65f, p.drive) * gain, p.satAmt, p.satType);
+        }
+        lastSample = os.downsample(u[0], u[1]) * clickG;
         return lastSample;
     }
 
@@ -548,6 +685,7 @@ private:
     bool gated = true;
     EnvADSR eg1, eg2;
     CascadeFilter filt;
+    HalfbandOS os;
     Saturation sat;
     PinkNoise pink;
     juce::Random rng;

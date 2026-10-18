@@ -39,6 +39,9 @@ jobs:
       - name: Self-test (under Xvfb)
         run: xvfb-run -a ./build/MonoHarness_artefacts/Release/MonoHarness
 
+      - name: Host check (under Xvfb)
+        run: xvfb-run -a ./build/HostCheck_artefacts/Release/HostCheck build/Monosynth_artefacts/Release/VST3/Monosynth.vst3
+
       - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:

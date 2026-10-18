@@ -68,6 +68,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     af(P::EG2_D, "EG2 Decay", 0.01f, 8.0f, 8.0f);
     af(P::EG2_S, "EG2 Sustain", 0.0f, 1.0f, 1.0f);
     af(P::EG2_R, "EG2 Release", 0.01f, 10.0f, 0.01f);
+    // 0 = off (old patches load unchanged); skewed so short delays/holds are easy to dial
+    auto skewSecs = [&](const char* id, const char* name) {
+        p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID(id, 1), name,
+            juce::NormalisableRange<float>(0.0f, 10.0f, 0.0f, 0.3f), 0.0f));
+    };
+    skewSecs(P::EG1_DELAY, "EG1 Delay");
+    skewSecs(P::EG2_HOLD, "EG2 Hold");
+    af(P::VCA_INIT, "VCA Initial Gain", 0.0f, 1.0f, 0.0f);
+
+    bf(P::ARP_ON, "Arp On", false);
+    cf(P::ARP_MODE, "Arp Mode", choiceLabels({"Up", "Down", "Up-Down", "Random"}), 0);
+    cf(P::ARP_DIV, "Arp Division", choiceLabels({"1/4", "1/4T", "1/4 D", "1/8", "1/8T", "1/8 D",
+                                                 "1/16", "1/16T", "1/16 D", "1/32", "1/32T"}), 6);
+    p.push_back(std::make_unique<juce::AudioParameterInt>(juce::ParameterID(P::ARP_OCT, 1), "Arp Octaves", 1, 4, 1));
+    af(P::ARP_GATE, "Arp Gate", 0.1f, 1.0f, 0.6f);
+    af(P::ARP_SWING, "Arp Swing", 0.0f, 1.0f, 0.0f);
+    bf(P::ARP_LATCH, "Arp Latch", false);
 
     af(P::BEND_RANGE, "Bend Range", 0.0f, 12.0f, 2.0f);
     af(P::VELSENS, "Velocity Sens", 0.0f, 1.0f, 0.5f);
@@ -105,6 +122,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     af(P::DL_TIME, "Delay Time", 20.0f, 1500.0f, 350.0f);
     af(P::DL_FB, "Delay FB", 0.0f, 0.85f, 0.35f);
     af(P::DL_MIX, "Delay Mix", 0.0f, 1.0f, 0.25f);
+    bf(P::DL_SYNC, "Delay Sync", false);
+    cf(P::DL_DIV, "Delay Division", SyncDiv::delayNames(), 1);
     bf(P::RV_ON, "Reverb On", false);
     af(P::RV_SIZE, "Reverb Size", 0.0f, 1.0f, 0.5f);
     af(P::RV_MIX, "Reverb Mix", 0.0f, 1.0f, 0.25f);
@@ -135,8 +154,12 @@ MonoProcessor::MonoProcessor()
     pp.eg1a = raw(P::EG1_A); pp.eg1d = raw(P::EG1_D); pp.eg1s = raw(P::EG1_S); pp.eg1r = raw(P::EG1_R);
     pp.eg2a = raw(P::EG2_A); pp.eg2d = raw(P::EG2_D); pp.eg2s = raw(P::EG2_S); pp.eg2r = raw(P::EG2_R);
     pp.bendRange = raw(P::BEND_RANGE); pp.velSens = raw(P::VELSENS);
+    pp.eg1Delay = raw(P::EG1_DELAY); pp.eg2Hold = raw(P::EG2_HOLD); pp.vcaInit = raw(P::VCA_INIT);
+    pp.arpOn = raw(P::ARP_ON); pp.arpMode = raw(P::ARP_MODE); pp.arpDiv = raw(P::ARP_DIV); pp.arpOct = raw(P::ARP_OCT);
+    pp.arpGate = raw(P::ARP_GATE); pp.arpSwing = raw(P::ARP_SWING); pp.arpLatch = raw(P::ARP_LATCH);
     pp.chOn = raw(P::CH_ON); pp.chRate = raw(P::CH_RATE); pp.chDepth = raw(P::CH_DEPTH);
     pp.dlOn = raw(P::DL_ON); pp.dlTime = raw(P::DL_TIME); pp.dlFb = raw(P::DL_FB); pp.dlMix = raw(P::DL_MIX);
+    pp.dlSync = raw(P::DL_SYNC); pp.dlDiv = raw(P::DL_DIV);
     pp.rvOn = raw(P::RV_ON); pp.rvSize = raw(P::RV_SIZE); pp.rvMix = raw(P::RV_MIX);
     for (int i = 0; i < P::NMOD; ++i)
     {
@@ -146,6 +169,13 @@ MonoProcessor::MonoProcessor()
     heldNotes.reserve(128); // never reallocates on the audio thread
     rng.setSeedRandomly();
     loadPreset(0);
+    undo = std::make_unique<SnapshotUndo>(*this,
+        [this] { auto st = presetState(); st.setProperty("prog", currentPreset.load(), nullptr); return st; },
+        [this](const juce::ValueTree& st)
+        {
+            loadPresetState(st);
+            setPresetIdentity((int) st.getProperty("prog", -1), st.getProperty("presetName", "Init Patch").toString());
+        });
 }
 
 MonoProcessor::~MonoProcessor() {}
@@ -157,6 +187,7 @@ void MonoProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     spec.maximumBlockSize = (juce::uint32) samplesPerBlock;
     spec.numChannels = 2;
     voice.prepare(cachedSr);
+    arp.prepare(cachedSr);
     mg.setSampleRate(cachedSr);
     chorus.prepare(cachedSr, samplesPerBlock);
     delay.prepare(cachedSr);
@@ -198,8 +229,10 @@ MonoDSP::SynthParams MonoProcessor::collectParams()
     p.eg1a = f(pp.eg1a); p.eg1d = f(pp.eg1d); p.eg1s = f(pp.eg1s); p.eg1r = f(pp.eg1r);
     p.eg2a = f(pp.eg2a); p.eg2d = f(pp.eg2d); p.eg2s = f(pp.eg2s); p.eg2r = f(pp.eg2r);
     p.bendRange = f(pp.bendRange); p.velSens = f(pp.velSens);
+    p.eg1Delay = f(pp.eg1Delay); p.eg2Hold = f(pp.eg2Hold); p.vcaInit = f(pp.vcaInit);
     p.chOn = b(pp.chOn); p.chRate = f(pp.chRate); p.chDepth = f(pp.chDepth);
     p.dlOn = b(pp.dlOn); p.dlTime = f(pp.dlTime); p.dlFb = f(pp.dlFb); p.dlMix = f(pp.dlMix);
+    p.dlSync = b(pp.dlSync); p.dlDiv = i(pp.dlDiv);
     p.rvOn = b(pp.rvOn); p.rvSize = f(pp.rvSize); p.rvMix = f(pp.rvMix);
     for (int k = 0; k < P::NMOD; ++k)
     {
@@ -248,7 +281,7 @@ void MonoProcessor::handleMidi(const juce::MidiMessage& msg, const MonoDSP::Synt
         {
             int last = heldNotes.back();
             voice.note = last;
-            voice.setTarget((float) last + bendSm);
+            voice.setTarget((float) last);
         }
         else voice.noteOff();
     }
@@ -321,9 +354,28 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         bendSemis = 0.0f; pitchWheelSrc = 0.0f;
     }
     MonoDSP::SynthParams p = collectParams();
+    MidiArp::Host host;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
+        {
             if (pos->getBpm()) hostBpm = *pos->getBpm();
+            host.playing = pos->getIsPlaying();
+            if (auto ppq = pos->getPpqPosition()) { host.ppq = *ppq; host.hasPpq = true; }
+        }
+    host.bpm = hostBpm;
+    {
+        // the arp turns held keys into a note pattern on its own sample grid
+        MidiArp::Settings as;
+        as.on = pp.arpOn->load() > 0.5f;
+        as.mode = (int) std::round(pp.arpMode->load());
+        as.stepBeats = MidiArp::divBeats((int) std::round(pp.arpDiv->load()));
+        as.octaves = (int) std::round(pp.arpOct->load());
+        as.gate = pp.arpGate->load();
+        as.swing = pp.arpSwing->load();
+        as.latch = pp.arpLatch->load() > 0.5f;
+        as.playedVel = true;
+        arp.process(midi, buffer.getNumSamples(), as, host);
+    }
 
     auto midiIt = midi.cbegin();
     const auto midiEnd = midi.cend();
@@ -361,9 +413,7 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         smNz += (tNz - smNz) * smK;            p.noise = smNz;
         smVol += (tVol - smVol) * smK;         p.volume = smVol;
         smVca += (tVca - smVca) * smK;         p.vca = smVca;
-        bendSm += (bendSemis - bendSm) * smK;  p.pitchBend = bendSm;
-
-        if (voice.active) voice.setTarget((float) voice.note + bendSm);
+        bendSm += (bendSemis - bendSm) * smK;  p.pitchBend = bendSm; // added after the glide slew
 
         float mgRaw = mg.next(rateHz, p.mgWave, rng);
         mgSmooth += (mgRaw - mgSmooth) * mgK;
@@ -389,7 +439,8 @@ void MonoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         if (p.rvOn && ! fxWasOn[2]) verb.clear();
         fxWasOn[0] = p.chOn; fxWasOn[1] = p.dlOn; fxWasOn[2] = p.rvOn;
         if (p.chOn) chorus.process(outL, outR, numSamples, p.chRate, p.chDepth, 0.5f);
-        if (p.dlOn) delay.process(outL, outR, numSamples, p.dlTime, p.dlFb, p.dlMix);
+        const float dlMs = p.dlSync ? SyncDiv::delayMs(p.dlDiv, hostBpm) : p.dlTime;
+        if (p.dlOn) delay.process(outL, outR, numSamples, dlMs, p.dlFb, p.dlMix);
         if (p.rvOn) verb.process(outL, outR, numSamples, p.rvSize, 0.5f, p.rvMix);
     }
 
@@ -479,12 +530,103 @@ void MonoProcessor::loadPreset(int index)
 
 void MonoProcessor::loadInit()
 {
+    auto step = undoStep();
     resetParamsToDefaults();
     setPresetIdentity(-1, "Init Patch");
     pendingAllOff = true; // serviced on the audio thread
 }
 
 void MonoProcessor::panic() { pendingPanic = true; }
+
+int MonoProcessor::paramGroup(const juce::String& id)
+{
+    // never randomized or mutated: VCO octave, pitch and fine tune
+    if (id.endsWith("oct") || id.endsWith("pitch") || id.endsWith("tune")) return -1;
+    if (id.startsWith("vco")) return RG_VCO;
+    if (id.startsWith("mix") || id == P::THICK || id == P::NOISE_TYPE) return RG_MIXER;
+    if (id.startsWith("hpf") || id.startsWith("lpf") || id == P::DRIVE || id == P::FMODEL) return RG_FILTER;
+    if (id.startsWith("eg")) return RG_ENV;
+    if (id.startsWith("mg")) return RG_MG;
+    if (id.startsWith("mod")) return RG_MATRIX;
+    if (id.startsWith("sat") || id.startsWith("ch") || id.startsWith("dl") || id.startsWith("rv")) return RG_FX;
+    if (id.startsWith("arp")) return RG_ARP;
+    return -1; // volume, VCA level / init, limiter, portamento, glide mode, bend range, velocity
+}
+
+void MonoProcessor::setGroupLocked(int g, bool locked)
+{
+    int m = getRandLocks();
+    apvts.state.setProperty("randLocks", locked ? (m | (1 << g)) : (m & ~(1 << g)), nullptr);
+}
+
+// A random patch inside musical limits: the signal path stays as it is,
+// only the knob positions move.
+void MonoProcessor::randomize()
+{
+    auto step = undoStep();
+    juce::Random r;
+    auto set = [&](const juce::String& id, float plain)
+    {
+        if (auto* prm = apvts.getParameter(id))
+            if (paramGroup(id) >= 0 && ! isGroupLocked(paramGroup(id)))
+                prm->setValueNotifyingHost(prm->convertTo0to1(plain));
+    };
+    auto rf = [&](float lo, float hi) { return lo + r.nextFloat() * (hi - lo); };
+    auto chance = [&](float p) { return r.nextFloat() < p; };
+    set(P::VCO1_WAVE, (float) r.nextInt(5)); set(P::VCO2_WAVE, (float) r.nextInt(5));
+    set(P::VCO1_PW, rf(0.2f, 0.8f)); set(P::VCO2_PW, rf(0.2f, 0.8f));
+    set(P::MIX_VCO1, rf(0.5f, 1.0f)); set(P::MIX_VCO2, chance(0.7f) ? rf(0.2f, 0.9f) : 0.0f);
+    set(P::MIX_RING, chance(0.25f) ? rf(0.1f, 0.5f) : 0.0f); set(P::MIX_NOISE, chance(0.25f) ? rf(0.05f, 0.3f) : 0.0f);
+    set(P::THICK, rf(0.0f, 0.6f)); set(P::NOISE_TYPE, (float) r.nextInt(2));
+    set(P::HPF_CUT, chance(0.6f) ? rf(10, 60) : rf(60, 900)); set(P::HPF_PEAK, rf(0.0f, 0.6f));
+    set(P::LPF_CUT, std::exp(rf(std::log(200.0f), std::log(12000.0f)))); set(P::LPF_RES, rf(0.0f, 0.85f));
+    set(P::DRIVE, rf(0.0f, 0.6f)); set(P::FMODEL, (float) r.nextInt(2));
+    set(P::EG1_A, rf(0.001f, 0.6f)); set(P::EG1_D, rf(0.05f, 2.0f)); set(P::EG1_S, rf(0.0f, 1.0f)); set(P::EG1_R, rf(0.02f, 1.5f));
+    set(P::EG2_A, chance(0.7f) ? rf(0.001f, 0.02f) : rf(0.02f, 1.0f)); set(P::EG2_D, rf(0.05f, 2.0f));
+    set(P::EG2_S, rf(0.2f, 1.0f)); set(P::EG2_R, rf(0.03f, 1.5f));
+    set(P::EG1_DELAY, chance(0.2f) ? rf(0.02f, 0.8f) : 0.0f); set(P::EG2_HOLD, chance(0.15f) ? rf(0.05f, 1.0f) : 0.0f);
+    set(P::MG_WAVE, (float) r.nextInt(5)); set(P::MG_RATE, std::exp(rf(std::log(0.1f), std::log(12.0f))));
+    set(P::MG_SYNC, chance(0.3f) ? 1.0f : 0.0f);
+    for (int k = 0; k < P::NMOD; ++k)
+    {
+        const bool on = chance(0.35f);
+        set(P::modSrcId(k), on ? (float) (1 + r.nextInt(10)) : 0.0f);
+        set(P::modDstId(k), on ? (float) (3 + r.nextInt(7)) : 0.0f); // PW, filters, VCA: never the VCO pitches
+        set(P::modAmtId(k), on ? rf(-0.6f, 0.6f) : 0.0f);
+        set(P::modTypeId(k), (float) r.nextInt(2));
+    }
+    set(P::SAT_AMT, chance(0.4f) ? rf(0.0f, 0.5f) : 0.0f); set(P::SAT_TYPE, (float) r.nextInt(4));
+    set(P::CH_ON, chance(0.25f) ? 1.0f : 0.0f); set(P::DL_ON, chance(0.25f) ? 1.0f : 0.0f);
+    set(P::RV_ON, chance(0.25f) ? 1.0f : 0.0f);
+    set(P::DL_FB, rf(0.1f, 0.6f)); set(P::DL_MIX, rf(0.1f, 0.4f)); set(P::RV_MIX, rf(0.1f, 0.4f));
+    set(P::ARP_ON, chance(0.3f) ? 1.0f : 0.0f); set(P::ARP_MODE, (float) r.nextInt(4));
+    set(P::ARP_DIV, (float) (3 + r.nextInt(5))); set(P::ARP_OCT, (float) (1 + r.nextInt(2)));
+    set(P::ARP_GATE, rf(0.3f, 0.9f)); set(P::ARP_SWING, chance(0.3f) ? rf(0.1f, 0.5f) : 0.0f);
+    setPresetIdentity(-1, "Random");
+}
+
+void MonoProcessor::mutate(float amount)
+{
+    auto step = undoStep();
+    juce::Random r;
+    for (auto* prm : getParameters())
+    {
+        auto* f = dynamic_cast<juce::AudioParameterFloat*>(prm); // continuous knobs only
+        if (f == nullptr) continue;
+        const int g = paramGroup(f->getParameterID());
+        if (g < 0 || isGroupLocked(g)) continue;
+        const auto id = f->getParameterID();
+        if (id.startsWith("mod") && prm->getValue() == prm->getDefaultValue()) continue; // unused slots stay empty
+        if (id.startsWith("mod") && id.endsWith("amt"))
+        {
+            // a slot routed to VCO pitch keeps its depth: mutation never retunes
+            const int dst = (int) std::round(apvts.getRawParameterValue(P::modDstId(id.substring(3, 4).getIntValue()))->load());
+            if (dst == 1 || dst == 2) continue;
+        }
+        f->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, prm->getValue() + (r.nextFloat() * 2.0f - 1.0f) * amount));
+    }
+    if (! currentName.endsWith("*")) setPresetIdentity(-1, currentName + "*");
+}
 
 juce::ValueTree MonoProcessor::presetState()
 {
