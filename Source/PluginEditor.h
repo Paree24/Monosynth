@@ -2,25 +2,31 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Parameters.h"
+#include "PastelViews.h"
 
 class MonoProcessor;
 class PresetBrowser;
 
+// v3 design (after Pastel EFX Grid; see mockup/redesign_v3.png): fully
+// monochrome. Ivory on charcoal, dot + title panel headers, arc knobs with
+// readouts, live views you drag.
 namespace MonoColors
 {
-    static const juce::Colour bg        { 0xff151515 };
-    static const juce::Colour panel     { 0xff202020 };
-    static const juce::Colour raised    { 0xff292929 };
-    static const juce::Colour control   { 0xff343434 };
-    static const juce::Colour border    { 0xff4a4a4a };
-    static const juce::Colour text      { 0xffe8e8e8 };
-    static const juce::Colour textDim   { 0xffa8a8a8 };
-    static const juce::Colour track     { 0xff3a3a3a };
-    static const juce::Colour blue      { 0xffb4b4b4 };
-    static const juce::Colour mint      { 0xffbdbdbd };
-    static const juce::Colour yellow    { 0xffc6c6c6 };
-    static const juce::Colour pink      { 0xffafafaf };
-    static const juce::Colour lavender  { 0xffcfcfcf };
+    static const juce::Colour bg       { 0xff141518 };
+    static const juce::Colour panel    { 0xff1c1f24 };
+    static const juce::Colour inner    { 0xff16181c };
+    static const juce::Colour grid     { 0xff24272c };
+    static const juce::Colour raised   { 0xff232529 };
+    static const juce::Colour control  { 0xff232529 };
+    static const juce::Colour border   { 0xff33363c };
+    static const juce::Colour edge     { 0xff3a3d43 };
+    static const juce::Colour text     { 0xffd9d5d0 };
+    static const juce::Colour textDim  { 0xff8f8b85 };
+    static const juce::Colour faint    { 0xff5c5a56 };
+    static const juce::Colour track    { 0xff33363c };
+    static const juce::Colour ivory    { 0xffe6dcc8 }; // the one accent
+    static const juce::Colour handle   { 0xfff4f1ec };
+    static const juce::Colour ink      { 0xff1b1d22 }; // text on a filled accent
 }
 
 class MonoLNF : public juce::LookAndFeel_V4
@@ -30,12 +36,13 @@ public:
     juce::Font uiFont(float h) const;
     juce::Font titleFont(float h) const;
     juce::Font logoFont(float h) const;
-    static juce::Colour accentFor(juce::Component& c);
+    static juce::Colour accentFor(juce::Component& c) { return pastel::accentFor(c); }
 
     juce::Font getLabelFont(juce::Label&) override;
     juce::Font getComboBoxFont(juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
     juce::Font getTextButtonFont(juce::TextButton&, int) override;
+    void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
     void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h, float pos,
                           float start, float end, juce::Slider&) override;
     void drawLinearSlider(juce::Graphics&, int x, int y, int w, int h, float pos,
@@ -50,54 +57,6 @@ private:
     juce::Typeface::Ptr latoReg, latoBold, latoBlack;
 };
 
-// Small rotary amount knob used in the matrix (attached to -1..+1 params).
-class AmountKnob : public juce::Component
-{
-public:
-    AmountKnob(MonoProcessor& p, const juce::String& paramId, MonoLNF& lnf);
-    void paint(juce::Graphics& g) override;
-    void mouseDown(const juce::MouseEvent&) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
-    void mouseUp(const juce::MouseEvent&) override;
-    void mouseDoubleClick(const juce::MouseEvent&) override;
-    float getValue() const { return value; }
-    void setValue(float v, bool notify);
-    void setQuiet(float v) { value = juce::jlimit(-1.0f, 1.0f, v); repaint(); }
-    std::function<void(float)> onChange;
-private:
-    void syncFromParam();
-    juce::RangedAudioParameter* param() const;
-    MonoProcessor& proc;
-    juce::String pid;
-    MonoLNF& lnf;
-    float value = 0.0f;
-    double dragStartY = 0.0;
-    float dragStartV = 0.0f;
-    bool inGesture = false; // begin/endChangeGesture bracket a drag (host automation + undo)
-};
-
-// Rotary knob whose caption turns into a live value readout while the knob is
-// hovered or dragged (name otherwise), so the panel stays calm at rest.
-class ValueKnob : public juce::Slider
-{
-public:
-    ValueKnob(MonoProcessor& p, const juce::String& paramId) : proc(p), pid(paramId) {}
-    void setCaption(juce::Label* l, const juce::String& name) { caption = l; captionName = name; }
-    juce::String valueText() const;
-    void mouseEnter(const juce::MouseEvent& e) override { juce::Slider::mouseEnter(e); hovered = true; refresh(); }
-    void mouseExit(const juce::MouseEvent& e) override { juce::Slider::mouseExit(e); hovered = false; refresh(); }
-    void valueChanged() override { refresh(); }
-    void startedDragging() override { dragging = true; refresh(); }
-    void stoppedDragging() override { dragging = false; refresh(); }
-    juce::String getTextFromValue(double) override { return valueText(); } // popup bubble (no caption)
-    void refresh();
-private:
-    MonoProcessor& proc;
-    juce::String pid, captionName;
-    juce::Label* caption = nullptr;
-    bool hovered = false, dragging = false;
-};
-
 class MonoContent : public juce::Component, private juce::Timer
 {
 public:
@@ -109,36 +68,46 @@ public:
     static constexpr int baseW = 1280, baseH = 832;
 private:
     void timerCallback() override;
-    void updateDelaySyncView();
-    juce::GroupComponent* addGroup(const juce::String& title, int x, int y, int w, int h, juce::Colour accent);
-    ValueKnob* addKnob(const juce::String& param, const juce::String& label, juce::Component* parent,
-                          int x, int y, int w = 64, int h = 78);
-    juce::Label* addCaption(const juce::String& text, juce::Component* parent, int x, int y, int w);
-    juce::ComboBox* addChoice(const juce::String& param, juce::Component* parent, int x, int y, int w, int h = 24);
+    juce::GroupComponent* addGroup(const juce::String& title, int x, int y, int w, int h);
+    // knob centred on (cx, cy), radius r; name + live value underneath (or beside)
+    juce::Slider* addKnob(const juce::String& param, const juce::String& label, juce::Component* parent,
+                          int cx, int cy, int r, bool bipolar = false, bool labelsBeside = false);
+    juce::Slider* addFader(const juce::String& param, const juce::String& label, juce::Component* parent,
+                           int cx, int y, int h);
+    juce::Slider* addBar(const juce::String& param, const juce::String& label, juce::Component* parent,
+                         int x, int y, int w, bool bipolar = false);
+    juce::Label* addCaption(const juce::String& text, juce::Component* parent, int x, int y, int w,
+                            juce::Justification just = juce::Justification::centredLeft);
+    juce::ComboBox* addChoice(const juce::String& param, juce::Component* parent, int x, int y, int w, int h = 22);
     juce::ToggleButton* addToggle(const juce::String& param, const juce::String& label, juce::Component* parent,
                                   int x, int y, int w, int h);
-    void addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 36,
-                        const char* const* names = nullptr);
-    void addOctButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw = 34);
+    juce::ToggleButton* addPower(const juce::String& param, juce::Component* parent, int x, int y);
+    pastel::SegChoice* addSeg(const juce::String& param, juce::Component* parent, juce::Rectangle<int> b,
+                          juce::StringArray labels = {}, std::vector<pastel::Wave> icons = {});
+    template <typename V, typename... Args>
+    V* addView(juce::Component* parent, juce::Rectangle<int> bounds, Args&&... args)
+    {
+        auto* v = new V(std::forward<Args>(args)...);
+        views.emplace_back(v);
+        parent->addAndMakeVisible(v);
+        v->setBounds(bounds);
+        return v;
+    }
     MonoProcessor& proc;
     MonoLNF lnf;
     juce::TextButton prevBtn { "<" }, nextBtn { ">" }, nameBtn { "Init Patch" };
     juce::TextButton saveBtn { "SAVE" }, initBtn { "INIT" }, panicBtn { "PANIC" };
-    juce::TextButton undoBtn { "UNDO" }, redoBtn { "REDO" };
-    juce::TextButton randBtn { "RAND" }, mutateBtn { "MUTATE" }, locksBtn { "LOCKS" };
-    juce::Slider* volTop = nullptr;
-    ValueKnob* dlTimeKnob = nullptr;      // hidden while the delay is tempo-synced...
-    juce::ComboBox* dlDivBox = nullptr;   // ...and this division selector shown instead
+    juce::TextButton undoBtn { juce::String::fromUTF8("\xe2\x86\xb6") }, redoBtn { juce::String::fromUTF8("\xe2\x86\xb7") };
+    juce::TextButton randBtn { "RANDOM" }, mutateBtn { "MUTATE" }, locksBtn { "LOCKS" };
+    juce::ComboBox* dlDivBox = nullptr;   // shown while the delay is tempo-synced
+    struct MatrixRow { std::vector<juce::Component*> parts; };
+    std::vector<MatrixRow> matrixRows;    // dimmed while the row has no source
     std::vector<std::unique_ptr<juce::GroupComponent>> groups;
     std::vector<std::unique_ptr<juce::Slider>> knobs;
     std::vector<std::unique_ptr<juce::Label>> labels;
     std::vector<std::unique_ptr<juce::ComboBox>> boxes;
     std::vector<std::unique_ptr<juce::ToggleButton>> toggles;
-    std::vector<std::unique_ptr<juce::TextButton>> waveBtns;
-    struct WaveBtnInfo { juce::TextButton* btn = nullptr; juce::String param; int index = 0; };
-    std::vector<WaveBtnInfo> waveBtnInfos;
-    std::vector<std::unique_ptr<AmountKnob>> amtKnobs;
-    std::vector<std::unique_ptr<juce::Label>> amtLabels;
+    std::vector<std::unique_ptr<juce::Component>> views;
     std::unique_ptr<PresetBrowser> browser;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> sAtt;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ComboBoxAttachment> cAtt;

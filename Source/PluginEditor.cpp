@@ -4,216 +4,7 @@
 #include "MonoAssets.h"
 #include <cmath>
 
-MonoLNF::MonoLNF()
-{
-    latoReg   = juce::Typeface::createSystemTypefaceFor(MonoAssets::LatoRegular_ttf, MonoAssets::LatoRegular_ttfSize);
-    latoBold  = juce::Typeface::createSystemTypefaceFor(MonoAssets::LatoBold_ttf, MonoAssets::LatoBold_ttfSize);
-    latoBlack = juce::Typeface::createSystemTypefaceFor(MonoAssets::LatoBlack_ttf, MonoAssets::LatoBlack_ttfSize);
-}
-juce::Font MonoLNF::uiFont(float h) const
-{
-    if (latoReg != nullptr) return juce::Font(latoReg).withHeight(h);
-    return juce::Font(h);
-}
-juce::Font MonoLNF::titleFont(float h) const
-{
-    if (latoBold != nullptr) return juce::Font(latoBold).withHeight(h);
-    return juce::Font(juce::FontOptions(h, juce::Font::bold));
-}
-juce::Font MonoLNF::logoFont(float h) const
-{
-    if (latoBlack != nullptr) return juce::Font(latoBlack).withHeight(h);
-    return titleFont(h);
-}
-juce::Colour MonoLNF::accentFor(juce::Component& c)
-{
-    juce::Component* start = dynamic_cast<juce::GroupComponent*>(&c) != nullptr ? &c : c.getParentComponent();
-    for (juce::Component* p = start; p != nullptr; p = p->getParentComponent())
-        if (auto* g = dynamic_cast<juce::GroupComponent*>(p))
-        {
-            auto v = g->getProperties()["accent"];
-            if (v.isInt()) return juce::Colour((juce::uint32)(int)v);
-            return MonoColors::textDim;
-        }
-    return MonoColors::textDim;
-}
-juce::Font MonoLNF::getLabelFont(juce::Label&) { return uiFont(12.0f); }
-juce::Font MonoLNF::getComboBoxFont(juce::ComboBox&) { return uiFont(12.5f); }
-juce::Font MonoLNF::getPopupMenuFont() { return uiFont(13.0f); }
-juce::Font MonoLNF::getTextButtonFont(juce::TextButton&, int) { return titleFont(12.0f); }
-
-void MonoLNF::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
-                               float pos, float start, float end, juce::Slider& slider)
-{
-    float cx = x + w * 0.5f, cy = y + h * 0.5f;
-    float r = juce::jmin(w, h) * 0.5f - 1.0f;
-    float a = start + pos * (end - start);
-    float br = r - 5.0f;
-    g.setColour(MonoColors::raised);
-    g.fillEllipse(cx - br, cy - br, br * 2, br * 2);
-    g.setColour(MonoColors::border);
-    g.drawEllipse(cx - br + 0.5f, cy - br + 0.5f, br * 2 - 1, br * 2 - 1, 1.0f);
-    float arcR = r - 1.5f;
-    g.setColour(MonoColors::track);
-    juce::Path track;
-    track.addArc(cx - arcR, cy - arcR, arcR * 2, arcR * 2, start, end, true);
-    g.strokePath(track, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
-    if (pos > 0.001f)
-    {
-        g.setColour(MonoLNF::accentFor(slider));
-        juce::Path val;
-        val.addArc(cx - arcR, cy - arcR, arcR * 2, arcR * 2, start, a, true);
-        g.strokePath(val, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
-    }
-    float dx = std::cos(a - juce::MathConstants<float>::halfPi);
-    float dy = std::sin(a - juce::MathConstants<float>::halfPi);
-    g.setColour(juce::Colours::white.withAlpha(0.9f));
-    g.drawLine(cx + dx * 2.0f, cy + dy * 2.0f, cx + dx * (br - 2.0f), cy + dy * (br - 2.0f), 2.5f);
-}
-
-void MonoLNF::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float pos,
-                               float, float, juce::Slider::SliderStyle, juce::Slider&)
-{
-    float cy = y + h * 0.5f;
-    float l = (float)(x + 4), rr = (float)(x + w - 4);
-    g.setColour(MonoColors::track);
-    g.fillRoundedRectangle(l, cy - 1.5f, rr - l, 3.0f, 1.5f);
-    float fx = l + pos * (rr - l);
-    g.setColour(MonoColors::blue);
-    g.fillRoundedRectangle(l, cy - 1.5f, fx - l, 3.0f, 1.5f);
-    g.setColour(MonoColors::text);
-    g.fillRoundedRectangle(fx - 5.0f, cy - 8.0f, 10.0f, 16.0f, 2.0f);
-}
-
-void MonoLNF::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool, bool)
-{
-    bool on = b.getToggleState();
-    float w = (float)b.getWidth(), h = (float)b.getHeight();
-    float pw = juce::jmin(w - 12.0f, 40.0f), ph = 15.0f;
-    float px = (w - pw) * 0.5f, py = 3.0f;
-    g.setColour(on ? MonoLNF::accentFor(b).withAlpha(0.4f) : MonoColors::track);
-    g.fillRoundedRectangle(px, py, pw, ph, ph * 0.5f);
-    float kr = ph - 5.0f;
-    float kx = on ? px + pw - kr - 2.5f : px + 2.5f;
-    g.setColour(on ? MonoLNF::accentFor(b) : MonoColors::textDim);
-    g.fillEllipse(kx, py + 2.5f, kr, kr);
-    g.setColour(on ? MonoColors::text : MonoColors::textDim);
-    g.setFont(uiFont(11.5f));
-    g.drawText(b.getButtonText(), 0, py + ph + 1.0f, (int)w, (int)(h - py - ph - 1.0f),
-               juce::Justification::centred, true);
-}
-
-void MonoLNF::drawComboBox(juce::Graphics& g, int w, int h, bool,
-                           int, int, int, int, juce::ComboBox& box)
-{
-    // Background + arrow only; JUCE paints the selected text itself.
-    g.setColour(MonoColors::control);
-    g.fillRoundedRectangle(0, 0, w, h, 4.0f);
-    g.setColour(box.hasKeyboardFocus(true) ? MonoLNF::accentFor(box) : MonoColors::border);
-    g.drawRoundedRectangle(0.5f, 0.5f, w - 1, h - 1, 4.0f, 1.0f);
-    juce::Path arrow;
-    arrow.addTriangle((float)w - 16.0f, h * 0.5f - 3, (float)w - 8.0f, h * 0.5f - 3, (float)w - 12.0f, h * 0.5f + 3);
-    g.setColour(MonoColors::textDim);
-    g.fillPath(arrow);
-    juce::ignoreUnused(box);
-}
-
-void MonoLNF::drawGroupComponentOutline(juce::Graphics& g, int w, int h, const juce::String& text,
-                                        const juce::Justification&, juce::GroupComponent& group)
-{
-    g.setColour(MonoColors::panel);
-    g.fillRoundedRectangle(0, 0, w, h, 5.0f);
-    juce::Colour accent = MonoLNF::accentFor(group);
-    g.setColour(MonoColors::border);
-    g.drawRoundedRectangle(0.5f, 0.5f, w - 1, h - 1, 5.0f, 1.0f);
-    const float barH = 24.0f;
-    g.setColour(MonoColors::raised);
-    g.fillRoundedRectangle(1, 1, w - 2, barH, 4.0f);
-    g.fillRect(1, (int)(barH - 5), w - 2, 5);
-    g.setColour(accent);
-    g.fillRect(10, (int)(barH - 3), 26, 2);
-    g.setColour(MonoColors::text);
-    g.setFont(titleFont(12.5f));
-    g.drawText(text.toUpperCase(), 42, 0, w - 48, (int)barH, juce::Justification::centredLeft, false);
-}
-
-void MonoLNF::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down)
-{
-    float w = (float)b.getWidth(), h = (float)b.getHeight();
-    bool on = b.getToggleState();
-    g.setColour(down ? MonoColors::raised : (on ? MonoColors::control.brighter(0.15f) : MonoColors::control));
-    g.fillRoundedRectangle(0, 0, w, h, 4.0f);
-    g.setColour(hover || on ? MonoColors::text : MonoColors::border);
-    g.drawRoundedRectangle(0.5f, 0.5f, w - 1, h - 1, 4.0f, 1.0f);
-}
-
-void MonoLNF::drawPopupMenuBackground(juce::Graphics& g, int w, int h)
-{
-    g.setColour(MonoColors::panel);
-    g.fillRoundedRectangle(0, 0, w, h, 5.0f);
-    g.setColour(MonoColors::border);
-    g.drawRoundedRectangle(0.5f, 0.5f, w - 1, h - 1, 5.0f, 1.0f);
-}
-
-// ---------------- AmountKnob ----------------
-AmountKnob::AmountKnob(MonoProcessor& p, const juce::String& paramId, MonoLNF& l)
-    : proc(p), pid(paramId), lnf(l) { syncFromParam(); }
-
-void AmountKnob::syncFromParam()
-{
-    if (auto* par = proc.apvts.getRawParameterValue(pid))
-        value = juce::jlimit(-1.0f, 1.0f, par->load());
-}
-void AmountKnob::setValue(float v, bool notify)
-{
-    value = juce::jlimit(-1.0f, 1.0f, v);
-    if (auto* par = dynamic_cast<juce::AudioParameterFloat*>(proc.apvts.getParameter(pid)))
-        par->setValueNotifyingHost(par->convertTo0to1(value));
-    if (notify && onChange) onChange(value);
-    repaint();
-}
-void AmountKnob::paint(juce::Graphics& g)
-{
-    float w = (float)getWidth(), h = (float)getHeight();
-    float cx = w * 0.5f, cy = h * 0.5f, r = juce::jmin(w, h) * 0.5f - 2.0f;
-    g.setColour(MonoColors::control);
-    g.fillEllipse(cx - r, cy - r, r * 2, r * 2);
-    g.setColour(MonoColors::border);
-    g.drawEllipse(cx - r + 0.5f, cy - r + 0.5f, r * 2 - 1, r * 2 - 1, 1.0f);
-    float range = juce::MathConstants<float>::pi * 1.35f;
-    float a = value * range;
-    g.setColour(MonoColors::pink);
-    g.drawLine(cx, cy, cx + std::sin(a) * (r - 3.0f), cy - std::cos(a) * (r - 3.0f), 2.0f);
-    g.setColour(MonoColors::textDim);
-    g.fillEllipse(cx - 1.5f, cy - r - 1.0f, 3.0f, 3.0f);
-}
-juce::RangedAudioParameter* AmountKnob::param() const { return proc.apvts.getParameter(pid); }
-void AmountKnob::mouseDown(const juce::MouseEvent& e)
-{
-    dragStartY = e.getScreenY(); dragStartV = value;
-    if (auto* par = param()) { par->beginChangeGesture(); inGesture = true; }
-}
-void AmountKnob::mouseUp(const juce::MouseEvent&)
-{
-    if (inGesture) if (auto* par = param()) par->endChangeGesture();
-    inGesture = false;
-}
-void AmountKnob::mouseDrag(const juce::MouseEvent& e)
-{
-    double dy = dragStartY - (double)e.getScreenY();
-    float step = e.mods.isShiftDown() ? 0.002f : 0.008f;
-    setValue(dragStartV + (float)(dy * step), true);
-}
-void AmountKnob::mouseDoubleClick(const juce::MouseEvent&)
-{
-    // mouseDown already opened a gesture for this click; close it after the reset
-    auto* par = param();
-    if (par != nullptr && ! inGesture) par->beginChangeGesture();
-    setValue(0.0f, true);
-    if (par != nullptr && ! inGesture) par->endChangeGesture();
-}
-
-// ---------------- ValueKnob ----------------
+// ---------------- value text ----------------
 // MG sync divisions, same table as the processor's mgRateHz (cycles per beat)
 static const char* mgSyncNames[11] = { "1/1", "1/2D", "1/2", "1/4D", "1/2T", "1/4", "1/8D", "1/4T", "1/8", "1/8T", "1/16" };
 
@@ -231,21 +22,10 @@ static juce::String fmtSigned(float v, int dec, const char* unit)
     return (v > 0.0f ? "+" : "") + juce::String(v, dec) + unit;
 }
 
-juce::String ValueKnob::valueText() const
+// Stateless (shared by every open editor through pastel::Theme::format).
+static juce::String monoFormat(const juce::String& id, float v)
 {
-    const float v = (float)getValue();
-    auto flag = [&](const char* id) {
-        auto* r = proc.apvts.getRawParameterValue(id);
-        return r != nullptr && r->load() > 0.5f;
-    };
-    const juce::String id = pid;
-    if (id == P::HPF_CUT || id == P::LPF_CUT || id == P::CH_RATE) return fmtHz(v);
-    if (id == P::MG_RATE)
-    {
-        if (! flag(P::MG_SYNC)) return fmtHz(v);
-        int idx = juce::jlimit(0, 10, (int)std::round(juce::jmap(v, 0.05f, 30.0f, 0.0f, 1.0f) * 10.0f));
-        return mgSyncNames[idx];
-    }
+    if (id == P::HPF_CUT || id == P::LPF_CUT || id == P::CH_RATE || id == P::MG_RATE) return fmtHz(v);
     if (id == P::EG1_A || id == P::EG1_D || id == P::EG1_R || id == P::EG2_A || id == P::EG2_D || id == P::EG2_R)
         return fmtSecs(v);
     if (id == P::EG1_DELAY || id == P::EG2_HOLD) return v <= 0.0005f ? juce::String("Off") : fmtSecs(v);
@@ -254,26 +34,216 @@ juce::String ValueKnob::valueText() const
     if (id == P::DL_TIME) return juce::String((int)std::round(v)) + " ms";
     if (id == P::VCO1_PITCH || id == P::VCO2_PITCH) return fmtSigned(v, 1, " st");
     if (id == P::VCO1_TUNE || id == P::VCO2_TUNE) return fmtSigned((float)std::round(v), 0, " ct");
-    if (id == P::BEND_RANGE) return juce::String("+/-") + juce::String(v, 1) + " st";
-    if (id == P::VOLUME)
+    if (id == P::BEND_RANGE) return juce::String::fromUTF8("\xc2\xb1") + juce::String(v, 1) + " st";
+    if (id == P::VOLUME || id == P::VCA_LEVEL)
         return v <= 0.0001f ? juce::String("-inf dB") : fmtSigned(20.0f * std::log10(v), 1, " dB");
+    if (id.startsWith("mod") && id.endsWith("amt")) return fmtSigned((float)std::round(v * 100.0f), 0, "%");
     // plain 0..x levels / amounts read as percent of their range
     return juce::String((int)std::round(v * 100.0f)) + "%";
 }
 
-void ValueKnob::refresh()
+// ---------------- look and feel ----------------
+MonoLNF::MonoLNF()
 {
-    if (caption == nullptr) return;
-    caption->setText(hovered || dragging ? valueText() : captionName, juce::dontSendNotification);
-    caption->setColour(juce::Label::textColourId, hovered || dragging ? MonoColors::text : MonoColors::textDim);
+    latoReg   = juce::Typeface::createSystemTypefaceFor(MonoAssets::LatoRegular_ttf, MonoAssets::LatoRegular_ttfSize);
+    latoBold  = juce::Typeface::createSystemTypefaceFor(MonoAssets::LatoBold_ttf, MonoAssets::LatoBold_ttfSize);
+    latoBlack = juce::Typeface::createSystemTypefaceFor(MonoAssets::LatoBlack_ttf, MonoAssets::LatoBlack_ttfSize);
+    // the shared v3 views draw monochrome, in Lato
+    pastel::Theme::accent  = MonoColors::ivory;
+    pastel::Theme::inner   = MonoColors::inner;
+    pastel::Theme::grid    = MonoColors::grid;
+    pastel::Theme::edge    = MonoColors::edge;
+    pastel::Theme::comboBg = MonoColors::control;
+    pastel::Theme::text    = MonoColors::text;
+    pastel::Theme::textDim = MonoColors::textDim;
+    pastel::Theme::faint   = MonoColors::faint;
+    pastel::Theme::handle  = MonoColors::handle;
+    pastel::Theme::ink     = MonoColors::ink;
+    pastel::Theme::regular = latoReg;
+    pastel::Theme::bold    = latoBold;
+    pastel::Theme::format  = monoFormat;
+}
+juce::Font MonoLNF::uiFont(float h) const
+{
+    if (latoReg != nullptr) return juce::Font(latoReg).withHeight(h);
+    return juce::Font(h);
+}
+juce::Font MonoLNF::titleFont(float h) const
+{
+    if (latoBold != nullptr) return juce::Font(latoBold).withHeight(h);
+    return juce::Font(juce::FontOptions(h, juce::Font::bold));
+}
+juce::Font MonoLNF::logoFont(float h) const
+{
+    if (latoBlack != nullptr) return juce::Font(latoBlack).withHeight(h);
+    return titleFont(h);
+}
+juce::Font MonoLNF::getLabelFont(juce::Label&) { return uiFont(12.0f); }
+juce::Font MonoLNF::getComboBoxFont(juce::ComboBox&) { return titleFont(11.5f); }
+juce::Font MonoLNF::getPopupMenuFont() { return uiFont(13.0f); }
+juce::Font MonoLNF::getTextButtonFont(juce::TextButton&, int) { return titleFont(12.0f); }
+
+void MonoLNF::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
+{
+    label.setBounds(4, 0, box.getWidth() - 22, box.getHeight());
+    label.setFont(getComboBoxFont(box));
+}
+
+// arc knob: track, value arc ("bipolar" = from 12 o'clock), needle
+void MonoLNF::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
+                               float pos, float start, float end, juce::Slider& slider)
+{
+    const float cx = x + w * 0.5f, cy = y + h * 0.5f;
+    const float r = juce::jmin(w, h) * 0.5f - 2.0f;
+    const float a = start + pos * (end - start);
+    const float sw = juce::jmax(2.6f, r * 0.17f);
+    const float arcR = r - sw * 0.5f;
+    const auto stroke = juce::PathStrokeType(sw, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+    juce::Path track;
+    track.addCentredArc(cx, cy, arcR, arcR, 0.0f, start, end, true);
+    g.setColour(MonoColors::edge);
+    g.strokePath(track, stroke);
+    const bool bipolar = (bool)slider.getProperties()["bipolar"];
+    const float from = bipolar ? (start + end) * 0.5f : start;
+    if (std::abs(a - from) > 0.01f)
+    {
+        juce::Path val;
+        val.addCentredArc(cx, cy, arcR, arcR, 0.0f, juce::jmin(from, a), juce::jmax(from, a), true);
+        g.setColour(accentFor(slider));
+        g.strokePath(val, stroke);
+    }
+    const float br = r - sw - 1.5f;
+    g.setColour(juce::Colour(0xff26292f));
+    g.fillEllipse(cx - br, cy - br, br * 2, br * 2);
+    g.setColour(MonoColors::edge);
+    g.drawEllipse(cx - br, cy - br, br * 2, br * 2, 1.0f);
+    const float dx = std::sin(a), dy = -std::cos(a);
+    g.setColour(MonoColors::handle);
+    g.drawLine(cx + dx * br * 0.25f, cy + dy * br * 0.25f, cx + dx * (br - 2.0f), cy + dy * (br - 2.0f), 2.0f);
+}
+
+// faders (vertical) and amount bars (horizontal, "bipolar" fills from the centre)
+void MonoLNF::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float pos,
+                               float, float, juce::Slider::SliderStyle, juce::Slider& s)
+{
+    const auto acc = accentFor(s);
+    if (s.isVertical())
+    {
+        const float cx = x + w * 0.5f, top = (float)y + 6.0f, bot = (float)(y + h) - 6.0f;
+        const float py = juce::jlimit(top, bot, pos);
+        g.setColour(MonoColors::track);
+        g.fillRoundedRectangle(cx - 2.0f, top, 4.0f, bot - top, 2.0f);
+        g.setColour(acc);
+        g.fillRoundedRectangle(cx - 2.0f, py, 4.0f, bot - py, 2.0f);
+        g.setColour(MonoColors::handle);
+        g.fillRoundedRectangle(cx - 11.0f, py - 5.0f, 22.0f, 10.0f, 3.0f);
+        return;
+    }
+    const float cy = y + h * 0.5f, l = (float)x + 6.0f, rr = (float)(x + w) - 6.0f;
+    const float px = juce::jlimit(l, rr, pos);
+    g.setColour(MonoColors::track);
+    g.fillRoundedRectangle(l, cy - 2.0f, rr - l, 4.0f, 2.0f);
+    g.setColour(acc);
+    if ((bool)s.getProperties()["bipolar"])
+    {
+        const float m = (l + rr) * 0.5f;
+        g.fillRoundedRectangle(juce::jmin(m, px), cy - 2.0f, std::abs(px - m), 4.0f, 2.0f);
+        g.setColour(MonoColors::faint);
+        g.drawVerticalLine((int)m, cy - 5.0f, cy + 5.0f);
+    }
+    else
+        g.fillRoundedRectangle(l, cy - 2.0f, px - l, 4.0f, 2.0f);
+    g.setColour(MonoColors::handle);
+    g.fillEllipse(px - 6.0f, cy - 6.0f, 12.0f, 12.0f);
+}
+
+// toggles: "power" property = the EFX power glyph, else a pill that fills when on
+void MonoLNF::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool hover, bool)
+{
+    const bool on = b.getToggleState();
+    const auto acc = accentFor(b);
+    auto r = b.getLocalBounds().toFloat();
+    if ((bool)b.getProperties()["power"])
+    {
+        const auto c = on ? acc : MonoColors::faint;
+        const float cx = r.getCentreX(), cy = r.getCentreY(), rad = 8.5f, ir = rad * 0.52f;
+        g.setColour(c);
+        g.drawEllipse(cx - rad, cy - rad, rad * 2, rad * 2, 1.4f);
+        juce::Path arc;
+        arc.addCentredArc(cx, cy, ir, ir, 0.0f, juce::degreesToRadians(35.0f), juce::degreesToRadians(325.0f), true);
+        g.strokePath(arc, juce::PathStrokeType(1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.drawLine(cx, cy - ir - 1.5f, cx, cy - 0.5f, 1.4f);
+        return;
+    }
+    r = r.reduced(1.0f);
+    const float rad = r.getHeight() * 0.5f;
+    if (on)
+    {
+        g.setColour(acc);
+        g.fillRoundedRectangle(r, rad);
+    }
+    else
+    {
+        g.setColour(acc.withAlpha(hover ? 0.8f : 0.5f));
+        g.drawRoundedRectangle(r, rad, 1.2f);
+    }
+    g.setColour(on ? MonoColors::ink : acc);
+    g.setFont(titleFont(10.5f));
+    g.drawText(b.getButtonText().toUpperCase(), r, juce::Justification::centred, true);
+}
+
+void MonoLNF::drawComboBox(juce::Graphics& g, int w, int h, bool,
+                           int, int, int, int, juce::ComboBox& box)
+{
+    // background + arrow only; JUCE paints the selected text itself
+    g.setColour(MonoColors::control);
+    g.fillRoundedRectangle(0, 0, (float)w, (float)h, 5.0f);
+    g.setColour(box.hasKeyboardFocus(true) ? accentFor(box) : MonoColors::edge);
+    g.drawRoundedRectangle(0.5f, 0.5f, w - 1.0f, h - 1.0f, 5.0f, 1.0f);
+    juce::Path arrow;
+    arrow.startNewSubPath(w - 15.0f, h * 0.5f - 2.0f);
+    arrow.lineTo(w - 11.0f, h * 0.5f + 2.0f);
+    arrow.lineTo(w - 7.0f, h * 0.5f - 2.0f);
+    g.setColour(MonoColors::textDim);
+    g.strokePath(arrow, juce::PathStrokeType(1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+// panel: neutral edge, dot + title
+void MonoLNF::drawGroupComponentOutline(juce::Graphics& g, int w, int h, const juce::String& text,
+                                        const juce::Justification&, juce::GroupComponent& group)
+{
+    g.setColour(MonoColors::panel);
+    g.fillRoundedRectangle(0, 0, (float)w, (float)h, 8.0f);
+    g.setColour(MonoColors::border);
+    g.drawRoundedRectangle(0.5f, 0.5f, w - 1.0f, h - 1.0f, 8.0f, 1.0f);
+    g.setColour(accentFor(group));
+    g.fillEllipse(12.4f, 14.4f, 7.2f, 7.2f);
+    g.setColour(MonoColors::text);
+    g.setFont(logoFont(13.0f));
+    g.drawText(text.toUpperCase(), 26, 6, w - 60, 24, juce::Justification::centredLeft, true);
+}
+
+void MonoLNF::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool hover, bool down)
+{
+    const float w = (float)b.getWidth(), h = (float)b.getHeight();
+    g.setColour(down ? juce::Colour(0xff2b2e34) : MonoColors::control);
+    g.fillRoundedRectangle(0, 0, w, h, 5.0f);
+    g.setColour(hover || b.hasKeyboardFocus(true) ? MonoColors::ivory.withAlpha(0.7f) : MonoColors::edge);
+    g.drawRoundedRectangle(0.5f, 0.5f, w - 1, h - 1, 5.0f, 1.0f);
+}
+
+void MonoLNF::drawPopupMenuBackground(juce::Graphics& g, int w, int h)
+{
+    g.setColour(MonoColors::panel);
+    g.fillRoundedRectangle(0, 0, (float)w, (float)h, 6.0f);
+    g.setColour(MonoColors::border);
+    g.drawRoundedRectangle(0.5f, 0.5f, w - 1.0f, h - 1.0f, 6.0f, 1.0f);
 }
 
 // ---------------- MonoContent ----------------
-static const char* waveNames[5] = { "Saw", "Tri", "Sqr", "Pls", "Sin" };   // VCO_WAVE order
-static const char* mgWaveNames[5] = { "Tri", "Saw", "Sqr", "Sin", "S&H" }; // MG_WAVE order
-
 MonoContent::MonoContent(MonoProcessor& p) : proc(p)
 {
+    using pastel::Wave;
     setLookAndFeel(&lnf);
 
     addAndMakeVisible(prevBtn); addAndMakeVisible(nextBtn);
@@ -284,7 +254,7 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
                      &undoBtn, &redoBtn, &randBtn, &mutateBtn, &locksBtn })
     {
         b->setLookAndFeel(&lnf);
-        b->setColour(juce::TextButton::buttonColourId, MonoColors::raised);
+        b->setColour(juce::TextButton::buttonColourId, MonoColors::control);
         b->setColour(juce::TextButton::textColourOnId, MonoColors::text);
         b->setColour(juce::TextButton::textColourOffId, MonoColors::text);
     }
@@ -312,7 +282,7 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     mutateBtn.onClick = [&] { proc.mutate(); refreshPresetName(); };
     locksBtn.onClick = [&]
     {
-        // ticked = locked: RAND / MUTATE leave that section alone
+        // ticked = locked: RANDOM / MUTATE leave that section alone
         juce::PopupMenu m;
         m.addSectionHeader("Locked sections");
         const auto names = MonoProcessor::randGroupNames();
@@ -325,7 +295,7 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     redoBtn.setTooltip("Redo (Ctrl+Shift+Z)");
     randBtn.setTooltip("Random patch inside musical limits (unlocked sections only, one undo step)");
     mutateBtn.setTooltip("Nudge the unlocked knobs a little (one undo step)");
-    locksBtn.setTooltip("Choose which sections RAND / MUTATE leave alone");
+    locksBtn.setTooltip("Choose which sections RANDOM / MUTATE leave alone");
     nameBtn.setTooltip("Browse presets");
     prevBtn.setTooltip("Previous preset");
     nextBtn.setTooltip("Next preset");
@@ -334,196 +304,136 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     panicBtn.setTooltip("Silence the voice, clear held notes and FX tails");
     refreshPresetName();
 
-    volTop = addKnob(P::VOLUME, "", this, 0, 0, 40, 40);
-    volTop->setVisible(true);
+    const std::vector<Wave> vcoWaves { Wave::saw, Wave::tri, Wave::square, Wave::pulse, Wave::sine }; // VCO_WAVE order
 
-    // ---- Panel 1 row 1 ----
-    auto* gVco1 = addGroup("VCO 1", 8, 64, 224, 252, MonoColors::blue);
-    addCaption("WAVEFORM", gVco1, 10, 30, 204);
-    addWaveButtons(P::VCO1_WAVE, gVco1, 18, 46);
-    addKnob(P::VCO1_PITCH, "PITCH", gVco1, 6, 92);
-    addKnob(P::VCO1_TUNE, "TUNE", gVco1, 80, 92);
-    addKnob(P::VCO1_PW, "PW", gVco1, 154, 92);
-    addCaption("OCTAVE", gVco1, 10, 176, 204);
-    addOctButtons(P::VCO1_OCT, gVco1, 23, 192);
+    // ---- row 1: VCO 1, VCO 2, mixer, filter, VCA, output ----
+    auto vco = [&](const char* title, int x, const char* wave, const char* pw, const char* oct,
+                   const char* pitch, const char* tune)
+    {
+        auto* g = addGroup(title, x, 64, 224, 252);
+        addView<pastel::WaveView>(g, { 12, 36, 200, 70 }, proc.apvts, wave, pw, vcoWaves)
+            ->setTooltip("Drag sideways on the pulse wave to set its width");
+        addSeg(wave, g, { 12, 112, 200, 24 }, {}, vcoWaves);
+        addSeg(oct, g, { 12, 142, 200, 22 });
+        addKnob(pitch, "Pitch", g, 62, 200, 18, true);
+        addKnob(tune, "Tune", g, 162, 200, 18, true);
+    };
+    vco("VCO 1", 8, P::VCO1_WAVE, P::VCO1_PW, P::VCO1_OCT, P::VCO1_PITCH, P::VCO1_TUNE);
+    vco("VCO 2", 240, P::VCO2_WAVE, P::VCO2_PW, P::VCO2_OCT, P::VCO2_PITCH, P::VCO2_TUNE);
 
-    auto* gVco2 = addGroup("VCO 2", 240, 64, 224, 252, MonoColors::blue);
-    addCaption("WAVEFORM", gVco2, 10, 30, 204);
-    addWaveButtons(P::VCO2_WAVE, gVco2, 18, 46);
-    addKnob(P::VCO2_PITCH, "PITCH", gVco2, 6, 92);
-    addKnob(P::VCO2_TUNE, "TUNE", gVco2, 80, 92);
-    addKnob(P::VCO2_PW, "PW", gVco2, 154, 92);
-    addCaption("OCTAVE", gVco2, 10, 176, 204);
-    addOctButtons(P::VCO2_OCT, gVco2, 23, 192);
+    auto* gMix = addGroup("Mixer", 472, 64, 140, 252);
+    addFader(P::MIX_VCO1, "VCO1", gMix, 22, 36, 118);
+    addFader(P::MIX_VCO2, "VCO2", gMix, 54, 36, 118);
+    addFader(P::MIX_RING, "Ring", gMix, 86, 36, 118);
+    addFader(P::MIX_NOISE, "Noise", gMix, 118, 36, 118);
+    addCaption("NOISE", gMix, 12, 190, 50);
+    addSeg(P::NOISE_TYPE, gMix, { 70, 190, 58, 20 }, { "W", "P" })->setTooltip("White / pink noise");
+    addBar(P::THICK, "Thick", gMix, 12, 220, 116)->setTooltip("Thickness: soft saturation on the oscillator bus");
 
-    auto* gMix = addGroup("MIXER", 472, 64, 140, 252, MonoColors::blue);
-    addKnob(P::MIX_VCO1, "VCO 1", gMix, 6, 34, 64, 66);
-    addKnob(P::MIX_VCO2, "VCO 2", gMix, 70, 34, 64, 66);
-    addKnob(P::MIX_RING, "RING", gMix, 6, 104, 64, 66);
-    addKnob(P::MIX_NOISE, "NOISE", gMix, 70, 104, 64, 66);
-    addKnob(P::THICK, "THICKNESS", gMix, 38, 174, 64, 66);
+    auto* gFilt = addGroup("Filter", 620, 64, 336, 252);
+    addCaption("HPF > LPF", gFilt, 230, 8, 90, juce::Justification::centredRight);
+    addView<pastel::FilterView>(gFilt, { 12, 36, 312, 146 }, proc.apvts, P::LPF_CUT, P::LPF_RES, juce::String(),
+                            P::HPF_CUT, P::HPF_PEAK)
+        ->setTooltip("Drag a handle: cutoff sideways, resonance / peak up and down");
+    addKnob(P::DRIVE, "Drive", gFilt, 44, 210, 16);
+    addCaption("MODEL", gFilt, 90, 196, 60);
+    addSeg(P::FMODEL, gFilt, { 140, 192, 184, 24 });
 
-    auto* gFilt = addGroup("FILTER", 620, 64, 336, 252, MonoColors::lavender);
-    addCaption("MIX  >  HPF  >  LPF", gFilt, 58, 30, 220);
-    addCaption("HPF (HIGH PASS)", gFilt, 10, 58, 150);
-    addKnob(P::HPF_CUT, "CUTOFF", gFilt, 14, 74, 64, 78);
-    addKnob(P::HPF_PEAK, "PEAK", gFilt, 92, 74, 64, 78);
-    addCaption("LPF (LOW PASS)", gFilt, 176, 58, 150);
-    addKnob(P::LPF_CUT, "CUTOFF", gFilt, 180, 74, 64, 78);
-    addKnob(P::LPF_RES, "RESO", gFilt, 258, 74, 64, 78);
-    // DRIVE centred under the HPF pair, MODEL under the LPF pair, both on
-    // one centre line
-    addKnob(P::DRIVE, "DRIVE", gFilt, 53, 160, 64, 72);
-    addCaption("MODEL", gFilt, 191, 160, 120);
-    addChoice(P::FMODEL, gFilt, 191, 176, 120);
+    auto* gVca = addGroup("VCA", 964, 64, 120, 252);
+    addKnob(P::VCA_LEVEL, "Level", gVca, 60, 96, 32);
+    addKnob(P::VCA_INIT, "Initial", gVca, 60, 196, 16)
+        ->setTooltip("Initial gain: the VCA stays open this much with no envelope (drones)");
 
-    auto* gVca = addGroup("VCA", 964, 64, 120, 252, MonoColors::yellow);
-    addKnob(P::VCA_LEVEL, "LEVEL", gVca, 28, 34, 64, 84);
-    addKnob(P::VCA_INIT, "INITIAL", gVca, 28, 140, 64, 84)->setTooltip("Initial gain: the VCA stays open this much with no envelope (drones)");
+    auto* gOut = addGroup("Output", 1092, 64, 180, 252);
+    addKnob(P::VOLUME, "Volume", gOut, 90, 100, 34);
+    addToggle(P::LIMITER, "Limiter", gOut, 50, 190, 80, 24)->setTooltip("Master limiter");
 
-    auto* gOut = addGroup("OUTPUT", 1092, 64, 180, 252, MonoColors::textDim);
-    addKnob(P::VOLUME, "VOLUME", gOut, 58, 30, 64, 72);
-    addKnob(P::PORTA, "PORTA", gOut, 58, 116, 64, 62);
-    addToggle(P::PORTA_ON, "PORTA", gOut, 8, 196, 78, 44);
-    addToggle(P::LIMITER, "LIMITER", gOut, 94, 196, 78, 44);
+    // ---- row 2: modulation generator, envelopes, expression ----
+    auto* gMg = addGroup("Mod Generator", 8, 324, 224, 160);
+    addView<pastel::LfoView>(gMg, { 12, 36, 200, 46 }, proc.apvts, P::MG_WAVE, juce::String(),
+                         std::vector<Wave> { Wave::tri, Wave::saw, Wave::square, Wave::sine, Wave::snh });
+    addSeg(P::MG_WAVE, gMg, { 12, 88, 200, 22 }, {}, { Wave::tri, Wave::saw, Wave::square, Wave::sine, Wave::snh });
+    addKnob(P::MG_RATE, "Rate", gMg, 30, 134, 13, false, true);
+    addToggle(P::MG_SYNC, "Sync", gMg, 150, 124, 62, 22)->setTooltip("Lock the rate to the host tempo");
 
-    // ---- Panel 1 row 2 ----
-    auto* gMg = addGroup("MODULATION GENERATOR", 8, 324, 224, 160, MonoColors::mint);
-    addCaption("WAVEFORM", gMg, 10, 30, 204);
-    addWaveButtons(P::MG_WAVE, gMg, 18, 46, 36, mgWaveNames);
-    addKnob(P::MG_RATE, "RATE", gMg, 34, 80, 64, 72);
-    addToggle(P::MG_SYNC, "SYNC", gMg, 118, 98, 80, 40);
+    auto* eg1 = addView<pastel::EnvView>(addGroup("Envelope 1", 240, 324, 372, 160), { 12, 34, 348, 120 }, proc.apvts,
+                                     juce::StringArray { P::EG1_A, P::EG1_D, P::EG1_S, P::EG1_R, P::EG1_DELAY },
+                                     "PITCH / MOD", pastel::EnvView::Extra::delay);
+    eg1->setTimeSkew(3.0f);
+    eg1->setTooltip("Drag the points; the first one is the delay before the attack");
+    auto* eg2 = addView<pastel::EnvView>(addGroup("Envelope 2", 620, 324, 372, 160), { 12, 34, 348, 120 }, proc.apvts,
+                                     juce::StringArray { P::EG2_A, P::EG2_D, P::EG2_S, P::EG2_R, P::EG2_HOLD },
+                                     "VCF / VCA", pastel::EnvView::Extra::hold);
+    eg2->setTimeSkew(3.0f);
+    eg2->setTooltip("Drag the points; the hold keeps the gate open at least this long");
 
-    auto* gEg1 = addGroup("ENVELOPE GENERATOR 1 (PITCH / MOD)", 240, 324, 372, 160, MonoColors::yellow);
-    addKnob(P::EG1_DELAY, "DELAY", gEg1, 6, 40, 68, 84)->setTooltip("EG1 delay: the attack waits this long after the key goes down");
-    addKnob(P::EG1_A, "ATTACK", gEg1, 78, 40, 68, 84);
-    addKnob(P::EG1_D, "DECAY", gEg1, 150, 40, 68, 84);
-    addKnob(P::EG1_S, "SUSTAIN", gEg1, 222, 40, 68, 84)->setTooltip("Full sustain = the classic delay / attack / release EG1 shape");
-    addKnob(P::EG1_R, "RELEASE", gEg1, 294, 40, 68, 84);
+    auto* gExp = addGroup("Express", 1000, 324, 272, 160);
+    addKnob(P::VELSENS, "Velocity", gExp, 40, 74, 18);
+    addKnob(P::BEND_RANGE, "Bend", gExp, 106, 74, 18);
+    addToggle(P::PORTA_ON, "Glide", gExp, 150, 38, 60, 22)->setTooltip("Portamento on / off");
+    addKnob(P::PORTA, "Time", gExp, 238, 62, 15);
+    addSeg(P::GLIDE_MODE, gExp, { 150, 120, 110, 22 })->setTooltip("Glide only between legato notes, or always");
 
-    auto* gEg2 = addGroup("ENVELOPE GENERATOR 2 (VCF / VCA)", 620, 324, 372, 160, MonoColors::yellow);
-    addKnob(P::EG2_HOLD, "HOLD", gEg2, 6, 40, 68, 84)->setTooltip("EG2 hold: the gate stays open at least this long, so a tap plays the whole envelope");
-    addKnob(P::EG2_A, "ATTACK", gEg2, 78, 40, 68, 84);
-    addKnob(P::EG2_D, "DECAY", gEg2, 150, 40, 68, 84);
-    addKnob(P::EG2_S, "SUSTAIN", gEg2, 222, 40, 68, 84);
-    addKnob(P::EG2_R, "RELEASE", gEg2, 294, 40, 68, 84);
-
-    auto* gVel = addGroup("EXPRESS", 1000, 324, 272, 160, MonoColors::pink);
-    addKnob(P::VELSENS, "VELOCITY", gVel, 12, 40, 72, 84);
-    addKnob(P::BEND_RANGE, "BEND", gVel, 100, 40, 72, 84);
-    addCaption("GLIDE MODE", gVel, 180, 36, 84);
-    addChoice(P::GLIDE_MODE, gVel, 184, 54, 76);
-    addCaption("NOISE TYPE", gVel, 180, 90, 84);
-    addChoice(P::NOISE_TYPE, gVel, 184, 108, 76);
-    // ---- Panel 2: mod matrix ----
-    auto* gMat = addGroup("MODULATION MATRIX", 8, 492, 760, 332, MonoColors::pink);
-    const char* heads[5] = { "#", "SOURCE", "AMOUNT", "DESTINATION", "TYPE" };
-    const int hx[5] = { 8, 40, 252, 380, 590 };
-    const int hw[5] = { 30, 200, 100, 200, 160 };
-    for (int i = 0; i < 5; ++i) addCaption(heads[i], gMat, hx[i], 30, hw[i]);
+    // ---- row 3: modulation matrix as patch-cable rows ----
+    auto* gMat = addGroup("Modulation Matrix", 8, 492, 760, 332);
     for (int r = 0; r < 8; ++r)
     {
-        int y = 50 + r * 34;
-        auto* num = new juce::Label("n" + juce::String(r), juce::String(r + 1));
-        labels.emplace_back(num);
-        gMat->addAndMakeVisible(num);
-        num->setBounds(hx[0], y, hw[0], 24);
-        num->setJustificationType(juce::Justification::centred);
-        num->setColour(juce::Label::textColourId, MonoColors::textDim);
-        num->setFont(lnf.uiFont(12.0f));
-
-        auto* sc = new juce::ComboBox();
-        boxes.emplace_back(sc);
-        gMat->addAndMakeVisible(sc);
-        sc->setBounds(hx[1], y, hw[1], 24);
-        sc->setLookAndFeel(&lnf);
-        sc->setColour(juce::ComboBox::textColourId, MonoColors::text);
-        if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(P::modSrcId(r))))
-            for (int k = 0; k < par->choices.size(); ++k) sc->addItem(par->choices[k], k + 1);
-        cAtt.add(new juce::AudioProcessorValueTreeState::ComboBoxAttachment(proc.apvts, P::modSrcId(r), *sc));
-
-        auto* ak = new AmountKnob(proc, P::modAmtId(r), lnf);
-        amtKnobs.emplace_back(ak);
-        gMat->addAndMakeVisible(ak);
-        ak->setBounds(hx[2], y - 1, 26, 26);
-        auto pct = [](float v) { return (v >= 0 ? "+" : "") + juce::String((int)std::round(v * 100)) + "%"; };
-        auto* al = new juce::Label("a" + juce::String(r), pct(ak->getValue()));
-        amtLabels.emplace_back(al);
-        gMat->addAndMakeVisible(al);
-        al->setBounds(hx[2] + 30, y, 60, 24);
-        al->setColour(juce::Label::textColourId, MonoColors::text);
-        al->setFont(lnf.uiFont(12.5f));
-        ak->onChange = [al, pct](float v) { al->setText(pct(v), juce::dontSendNotification); };
-
-        auto* dc = new juce::ComboBox();
-        boxes.emplace_back(dc);
-        gMat->addAndMakeVisible(dc);
-        dc->setBounds(hx[3], y, hw[3], 24);
-        dc->setLookAndFeel(&lnf);
-        dc->setColour(juce::ComboBox::textColourId, MonoColors::text);
-        if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(P::modDstId(r))))
-            for (int k = 0; k < par->choices.size(); ++k) dc->addItem(par->choices[k], k + 1);
-        cAtt.add(new juce::AudioProcessorValueTreeState::ComboBoxAttachment(proc.apvts, P::modDstId(r), *dc));
-
-        auto* tc = new juce::ComboBox();
-        boxes.emplace_back(tc);
-        gMat->addAndMakeVisible(tc);
-        tc->setBounds(hx[4], y, hw[4], 24);
-        tc->setLookAndFeel(&lnf);
-        tc->setColour(juce::ComboBox::textColourId, MonoColors::text);
-        if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(P::modTypeId(r))))
-            for (int k = 0; k < par->choices.size(); ++k) tc->addItem(par->choices[k], k + 1);
-        cAtt.add(new juce::AudioProcessorValueTreeState::ComboBoxAttachment(proc.apvts, P::modTypeId(r), *tc));
+        const int y = 40 + r * 35;
+        MatrixRow row;
+        auto* num = addCaption(juce::String(r + 1), gMat, 12, y + 4, 18, juce::Justification::centred);
+        num->setColour(juce::Label::textColourId, MonoColors::faint);
+        row.parts.push_back(num);
+        row.parts.push_back(addChoice(P::modSrcId(r), gMat, 36, y, 150, 26));
+        auto* amt = addBar(P::modAmtId(r), {}, gMat, 196, y + 1, 270, true);
+        amt->setTooltip("Amount (double-click = 0)");
+        row.parts.push_back(amt);
+        auto* arrow = addCaption(juce::String::fromUTF8("\xe2\x86\x92"), gMat, 470, y + 4, 22, juce::Justification::centred);
+        row.parts.push_back(arrow);
+        row.parts.push_back(addChoice(P::modDstId(r), gMat, 496, y, 166, 26));
+        row.parts.push_back(addSeg(P::modTypeId(r), gMat, { 670, y + 2, 78, 22 }, { "BI", "UNI" }));
+        matrixRows.push_back(row);
     }
 
-    // arpeggiator (was GLOBAL: bend range, glide time / mode and noise type
-    // live in EXPRESS / OUTPUT)
-    auto* gArp = addGroup("ARPEGGIATOR", 776, 492, 200, 332, MonoColors::mint);
-    addToggle(P::ARP_ON, "ON", gArp, 20, 34, 76, 40);
-    addToggle(P::ARP_LATCH, "LATCH", gArp, 104, 34, 76, 40)->setTooltip("Keep the pattern going after the keys go up");
-    addCaption("MODE", gArp, 10, 88, 180);
-    addChoice(P::ARP_MODE, gArp, 40, 104, 120);
-    addCaption("DIVISION", gArp, 10, 138, 180);
-    addChoice(P::ARP_DIV, gArp, 40, 154, 120);
-    addKnob(P::ARP_OCT, "OCT", gArp, 6, 196, 60, 62);
-    addKnob(P::ARP_GATE, "GATE", gArp, 70, 196, 60, 62);
-    addKnob(P::ARP_SWING, "SWING", gArp, 134, 196, 60, 62);
+    // arpeggiator
+    auto* gArp = addGroup("Arpeggiator", 776, 492, 200, 332);
+    addPower(P::ARP_ON, gArp, 170, 6)->setTooltip("Arpeggiator on / off");
+    addSeg(P::ARP_MODE, gArp, { 12, 40, 176, 24 }, { "UP", "DOWN", "U/D", "RND" });
+    addChoice(P::ARP_DIV, gArp, 12, 72, 120, 24);
+    addToggle(P::ARP_LATCH, "Latch", gArp, 138, 73, 50, 22)->setTooltip("Keep the pattern going after the keys go up");
+    addKnob(P::ARP_OCT, "Octaves", gArp, 100, 150, 26);
+    addKnob(P::ARP_GATE, "Gate", gArp, 52, 250, 22);
+    addKnob(P::ARP_SWING, "Swing", gArp, 148, 250, 22);
 
-    auto* gFx = addGroup("EFFECTS", 984, 492, 288, 332, MonoColors::textDim);
-    // four rows on a shared grid: knobs in columns 1-3, switch/selector in
-    // the right column, everything centred on each row's knob line
+    // effects: one row each; drag the pictures
+    auto* gFx = addGroup("Effects", 984, 492, 288, 332);
+    addCaption("SAT > CHO > DLY > REV", gFx, 120, 8, 156, juce::Justification::centredRight);
     {
-        const int kx[3] = { 12, 76, 140 }, rx = 204, rw = 72;
-        auto rowCap = [&](const char* t, int y0) {
-            addCaption(t, gFx, 12, y0, 264)->setJustificationType(juce::Justification::centredLeft);
-        };
-        const int step = 74, kh = 52; // knob slider 36px + label; 10px air above next caption
-        auto knob = [&](const char* id, const char* lab, int col, int y0) { return addKnob(id, lab, gFx, kx[col], y0 + 14, 60, kh); };
-        int y0 = 30;
-        rowCap("DISTORTION", y0);
-        knob(P::SAT_AMT, "AMOUNT", 0, y0);
-        addChoice(P::SAT_TYPE, gFx, rx, y0 + 20, rw);
-        y0 += step;
-        rowCap("CHORUS", y0);
-        knob(P::CH_RATE, "RATE", 0, y0);
-        knob(P::CH_DEPTH, "DEPTH", 1, y0);
-        addToggle(P::CH_ON, "ON", gFx, rx, y0 + 22, rw, 36);
-        y0 += step;
-        rowCap("DELAY", y0);
-        dlTimeKnob = knob(P::DL_TIME, "TIME", 0, y0);
-        knob(P::DL_FB, "FDBK", 1, y0);
-        knob(P::DL_MIX, "MIX", 2, y0);
-        // synced: the division selector takes the TIME knob's place
-        dlDivBox = addChoice(P::DL_DIV, gFx, kx[0] - 2, y0 + 26, 64);
-        addToggle(P::DL_ON, "ON", gFx, rx, y0 + 22, rw / 2, 36);
-        auto* syncT = addToggle(P::DL_SYNC, "SYNC", gFx, rx + rw / 2, y0 + 22, rw / 2, 36);
-        syncT->setTooltip("Lock the delay time to the host tempo");
-        syncT->onClick = [this] { updateDelaySyncView(); };
-        y0 += step;
-        rowCap("REVERB", y0);
-        knob(P::RV_SIZE, "SIZE", 0, y0);
-        knob(P::RV_MIX, "MIX", 1, y0);
-        addToggle(P::RV_ON, "ON", gFx, rx, y0 + 22, rw, 36);
+        int y0 = 36;
+        addCaption("DISTORTION", gFx, 12, y0, 120);
+        addView<pastel::DriveView>(gFx, { 12, y0 + 16, 140, 52 }, proc.apvts, P::SAT_AMT, P::SAT_TYPE)
+            ->setTooltip("Drag up / down: saturation amount");
+        addSeg(P::SAT_TYPE, gFx, { 160, y0 + 30, 116, 22 }, { "TAPE", "TUBE", "FOLD", "FUZZ" });
+        y0 += 72;
+        addCaption("CHORUS", gFx, 12, y0, 120);
+        addPower(P::CH_ON, gFx, 252, y0 - 6);
+        addView<pastel::FxView>(gFx, { 12, y0 + 16, 264, 52 }, proc.apvts, pastel::FxView::Style::chorus,
+                            P::CH_RATE, P::CH_DEPTH, P::CH_ON)->setTooltip("Drag: rate sideways, depth up / down");
+        y0 += 72;
+        addCaption("DELAY", gFx, 12, y0, 60);
+        addPower(P::DL_ON, gFx, 252, y0 - 6);
+        addView<pastel::FxView>(gFx, { 12, y0 + 16, 130, 52 }, proc.apvts, pastel::FxView::Style::delay,
+                            P::DL_TIME, P::DL_FB, P::DL_ON, P::DL_SYNC, P::DL_DIV)
+            ->setTooltip("Drag: time sideways (when not synced), feedback up / down");
+        addToggle(P::DL_SYNC, "Sync", gFx, 150, y0 + 17, 46, 20)->setTooltip("Lock the delay time to the host tempo");
+        dlDivBox = addChoice(P::DL_DIV, gFx, 200, y0 + 16, 76, 22);
+        addCaption("MIX", gFx, 150, y0 + 48, 28);
+        addBar(P::DL_MIX, {}, gFx, 176, y0 + 44, 100);
+        y0 += 72;
+        addCaption("REVERB", gFx, 12, y0, 60);
+        addPower(P::RV_ON, gFx, 252, y0 - 6);
+        addView<pastel::FxView>(gFx, { 12, y0 + 16, 264, 52 }, proc.apvts, pastel::FxView::Style::reverb,
+                            P::RV_SIZE, P::RV_MIX, P::RV_ON, juce::String(), juce::String(), "SIZE", "MIX")
+            ->setTooltip("Drag: size sideways, mix up / down");
     }
 
     // preset browser overlay (created last: paints above everything)
@@ -533,9 +443,7 @@ MonoContent::MonoContent(MonoProcessor& p) : proc(p)
     browser->onClose = [&] { browser->setVisible(false); };
     browser->onPresetChanged = [&] { refreshPresetName(); };
 
-    updateDelaySyncView();
-    undoBtn.setEnabled(proc.canUndo());
-    redoBtn.setEnabled(proc.canRedo());
+    timerCallback();
     startTimerHz(4);
 }
 
@@ -543,88 +451,150 @@ MonoContent::~MonoContent() { setLookAndFeel(nullptr); }
 
 void MonoContent::timerCallback()
 {
-    for (size_t i = 0; i < amtKnobs.size() && i < amtLabels.size(); ++i)
-    {
-        if (auto* par = proc.apvts.getRawParameterValue(P::modAmtId((int)i)))
+    undoBtn.setEnabled(proc.canUndo());
+    redoBtn.setEnabled(proc.canRedo());
+    if (dlDivBox != nullptr)
+        if (auto* r = proc.apvts.getRawParameterValue(P::DL_SYNC))
+            dlDivBox->setVisible(r->load() > 0.5f);
+    for (size_t i = 0; i < matrixRows.size(); ++i)
+        if (auto* src = proc.apvts.getRawParameterValue(P::modSrcId((int)i)))
         {
-            float v = juce::jlimit(-1.0f, 1.0f, par->load());
-            amtLabels[i]->setText((v >= 0 ? "+" : "") + juce::String((int)std::round(v * 100)) + "%",
-                                  juce::dontSendNotification);
-            amtKnobs[i]->setQuiet(v);
+            const float a = src->load() < 0.5f ? 0.4f : 1.0f;   // "---" = unpatched
+            for (auto* c : matrixRows[i].parts)
+                if (c->getAlpha() != a) c->setAlpha(a);
         }
-    }
-    for (auto& wi : waveBtnInfos)
-    {
-        if (auto* par = proc.apvts.getParameter(wi.param))
-        {
-            int cur = (int)std::round(par->getValue() * 4.0f);
-            wi.btn->setToggleState(cur == wi.index, juce::dontSendNotification);
-        }
-    }
-    updateDelaySyncView();
     refreshPresetName();
 }
 
-void MonoContent::updateDelaySyncView()
-{
-    if (dlTimeKnob == nullptr || dlDivBox == nullptr) return;
-    auto* r = proc.apvts.getRawParameterValue(P::DL_SYNC);
-    bool synced = r != nullptr && r->load() > 0.5f;
-    dlTimeKnob->setVisible(! synced);
-    dlDivBox->setVisible(synced);
-}
-
-juce::GroupComponent* MonoContent::addGroup(const juce::String& title, int x, int y, int w, int h, juce::Colour accent)
+juce::GroupComponent* MonoContent::addGroup(const juce::String& title, int x, int y, int w, int h)
 {
     auto* g = new juce::GroupComponent(title, title);
     groups.emplace_back(g);
     addAndMakeVisible(g);
     g->setBounds(x, y, w, h);
     g->setLookAndFeel(&lnf);
-    g->getProperties().set("accent", (int)accent.getARGB());
     return g;
 }
 
-juce::Label* MonoContent::addCaption(const juce::String& text, juce::Component* parent, int x, int y, int w)
+juce::Label* MonoContent::addCaption(const juce::String& text, juce::Component* parent, int x, int y, int w,
+                                     juce::Justification just)
 {
     auto* l = new juce::Label(text, text);
     labels.emplace_back(l);
     parent->addAndMakeVisible(l);
-    l->setBounds(x, y, w, 14);
-    l->setJustificationType(juce::Justification::centred);
+    l->setBounds(x, y, w, 18);
+    l->setJustificationType(just);
+    l->setBorderSize({});
     l->setColour(juce::Label::textColourId, MonoColors::textDim);
-    l->setFont(lnf.uiFont(11.5f));
+    l->setFont(lnf.titleFont(9.5f));
+    l->setInterceptsMouseClicks(false, false);
     return l;
 }
 
-ValueKnob* MonoContent::addKnob(const juce::String& param, const juce::String& label,
-                                   juce::Component* parent, int x, int y, int w, int h)
+// value text for a knob / bar: the MG rate reads as a division while synced
+static void installText(juce::Slider* s, MonoProcessor& proc, const juce::String& param)
 {
-    auto* s = new ValueKnob(proc, param);
+    s->textFromValueFunction = [&proc, param](double v)
+    {
+        if (param == P::MG_RATE)
+            if (auto* r = proc.apvts.getRawParameterValue(P::MG_SYNC); r != nullptr && r->load() > 0.5f)
+                return juce::String(mgSyncNames[juce::jlimit(0, 10, (int)std::round(juce::jmap((float)v, 0.05f, 30.0f, 0.0f, 1.0f) * 10.0f))]);
+        return monoFormat(param, (float)v);
+    };
+}
+
+juce::Slider* MonoContent::addKnob(const juce::String& param, const juce::String& label, juce::Component* parent,
+                                   int cx, int cy, int r, bool bipolar, bool beside)
+{
+    auto* s = new juce::Slider();
     knobs.emplace_back(s);
     parent->addAndMakeVisible(s);
-    s->setBounds(x, y, w, h - 16);
+    s->setBounds(cx - r - 3, cy - r - 3, 2 * r + 6, 2 * r + 6);
     s->setSliderStyle(juce::Slider::RotaryVerticalDrag);
     s->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     s->setLookAndFeel(&lnf);
-    s->setDoubleClickReturnValue(true, proc.apvts.getParameter(param) ?
-        proc.apvts.getParameter(param)->convertFrom0to1(
-            proc.apvts.getParameter(param)->getDefaultValue()) : 0.5);
-    sAtt.add(new juce::AudioProcessorValueTreeState::SliderAttachment(proc.apvts, param, *s));
-    if (auto* prm = proc.apvts.getParameter(param)) s->setTooltip(prm->getName(64));
-    if (label.isNotEmpty())
+    if (bipolar) s->getProperties().set("bipolar", true);
+    if (auto* prm = proc.apvts.getParameter(param))
     {
-        auto* l = new juce::Label(param + "_l", label);
+        sAtt.add(new juce::AudioProcessorValueTreeState::SliderAttachment(proc.apvts, param, *s));
+        s->setDoubleClickReturnValue(true, prm->convertFrom0to1(prm->getDefaultValue()));
+        s->setPopupDisplayEnabled(true, true, this);
+        s->setTooltip(prm->getName(64));
+    }
+    installText(s, proc, param); // after the attachment, which installs the raw text function
+    auto mk = [&](const juce::String& txt, juce::Colour c, float fh, juce::Rectangle<int> b)
+    {
+        auto* l = new juce::Label({}, txt);
         labels.emplace_back(l);
         parent->addAndMakeVisible(l);
-        l->setBounds(x, y + h - 16, w, 14);
-        l->setJustificationType(juce::Justification::centred);
-        l->setColour(juce::Label::textColourId, MonoColors::textDim);
-        l->setFont(lnf.uiFont(11.5f));
+        l->setBounds(b);
+        l->setJustificationType(beside ? juce::Justification::centredLeft : juce::Justification::centred);
+        l->setBorderSize({});
+        l->setColour(juce::Label::textColourId, c);
+        l->setFont(lnf.titleFont(fh));
         l->setInterceptsMouseClicks(false, false);
-        s->setCaption(l, label);
+        return l;
+    };
+    const auto nameB  = beside ? juce::Rectangle<int>(cx + r + 8, cy - 13, 90, 12) : juce::Rectangle<int>(cx - 44, cy + r + 4, 88, 12);
+    const auto valueB = beside ? juce::Rectangle<int>(cx + r + 8, cy, 90, 14) : juce::Rectangle<int>(cx - 44, cy + r + 16, 88, 14);
+    mk(label.toUpperCase(), MonoColors::textDim, 9.5f, nameB);
+    auto* value = mk({}, MonoColors::text, 11.0f, valueB);
+    s->onValueChange = [s, value] { value->setText(s->getTextFromValue(s->getValue()), juce::dontSendNotification); };
+    s->onValueChange();
+    return s;
+}
+
+juce::Slider* MonoContent::addFader(const juce::String& param, const juce::String& label, juce::Component* parent,
+                                    int cx, int y, int h)
+{
+    auto* s = new juce::Slider();
+    knobs.emplace_back(s);
+    parent->addAndMakeVisible(s);
+    s->setBounds(cx - 14, y, 28, h);
+    s->setSliderStyle(juce::Slider::LinearVertical);
+    s->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    s->setLookAndFeel(&lnf);
+    if (auto* prm = proc.apvts.getParameter(param))
+    {
+        sAtt.add(new juce::AudioProcessorValueTreeState::SliderAttachment(proc.apvts, param, *s));
+        s->setDoubleClickReturnValue(true, prm->convertFrom0to1(prm->getDefaultValue()));
+        s->setTooltip(prm->getName(64));
     }
-    else s->setPopupDisplayEnabled(true, true, this); // no caption: value bubble while dragging
+    installText(s, proc, param);
+    auto* name = addCaption(label.toUpperCase(), parent, cx - 20, y + h + 2, 40, juce::Justification::centred);
+    name->setFont(lnf.titleFont(9.0f));
+    auto* value = addCaption({}, parent, cx - 20, y + h + 15, 40, juce::Justification::centred);
+    value->setColour(juce::Label::textColourId, MonoColors::text);
+    value->setFont(lnf.titleFont(10.5f));
+    s->onValueChange = [s, value] { value->setText(s->getTextFromValue(s->getValue()), juce::dontSendNotification); };
+    s->onValueChange();
+    return s;
+}
+
+juce::Slider* MonoContent::addBar(const juce::String& param, const juce::String& label, juce::Component* parent,
+                                  int x, int y, int w, bool bipolar)
+{
+    const int lw = label.isEmpty() ? 0 : 48;
+    if (lw > 0) addCaption(label.toUpperCase(), parent, x, y + 3, lw);
+    auto* s = new juce::Slider();
+    knobs.emplace_back(s);
+    parent->addAndMakeVisible(s);
+    s->setBounds(x + lw, y, w - lw - 46, 24);
+    s->setSliderStyle(juce::Slider::LinearHorizontal);
+    s->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    s->setLookAndFeel(&lnf);
+    if (bipolar) s->getProperties().set("bipolar", true);
+    if (auto* prm = proc.apvts.getParameter(param))
+    {
+        sAtt.add(new juce::AudioProcessorValueTreeState::SliderAttachment(proc.apvts, param, *s));
+        s->setDoubleClickReturnValue(true, prm->convertFrom0to1(prm->getDefaultValue()));
+    }
+    installText(s, proc, param);
+    auto* value = addCaption({}, parent, x + w - 44, y + 3, 44, juce::Justification::centredRight);
+    value->setColour(juce::Label::textColourId, MonoColors::text);
+    value->setFont(lnf.titleFont(11.0f));
+    s->onValueChange = [s, value] { value->setText(s->getTextFromValue(s->getValue()), juce::dontSendNotification); };
+    s->onValueChange();
     return s;
 }
 
@@ -655,63 +625,17 @@ juce::ToggleButton* MonoContent::addToggle(const juce::String& param, const juce
     return t;
 }
 
-void MonoContent::addWaveButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw,
-                                 const char* const* names)
+juce::ToggleButton* MonoContent::addPower(const juce::String& param, juce::Component* parent, int x, int y)
 {
-    if (names == nullptr) names = waveNames;
-    for (int i = 0; i < 5; ++i)
-    {
-        auto* b = new juce::TextButton(names[i]);
-        waveBtns.emplace_back(b);
-        parent->addAndMakeVisible(b);
-        b->setBounds(x + i * (bw + 2), y, bw, 24);
-        b->setLookAndFeel(&lnf);
-        b->setClickingTogglesState(true);
-        b->setRadioGroupId(param.hashCode());
-        b->onClick = [&, i, param] {
-            if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(param)))
-            {
-                par->beginChangeGesture();
-                par->setValueNotifyingHost(par->convertTo0to1((float)i));
-                par->endChangeGesture();
-            }
-        };
-        if (auto* par = proc.apvts.getParameter(param))
-        {
-            int cur = (int)std::round(par->getValue() * 4.0f);
-            b->setToggleState(cur == i, juce::dontSendNotification);
-        }
-        waveBtnInfos.push_back({ b, param, i });
-    }
+    auto* t = addToggle(param, {}, parent, x, y, 24, 24);
+    t->getProperties().set("power", true);
+    return t;
 }
 
-void MonoContent::addOctButtons(const juce::String& param, juce::Component* parent, int x, int y, int bw)
+pastel::SegChoice* MonoContent::addSeg(const juce::String& param, juce::Component* parent, juce::Rectangle<int> b,
+                                   juce::StringArray labelsIn, std::vector<pastel::Wave> icons)
 {
-    const char* names[5] = { "-2", "-1", "0", "+1", "+2" };
-    for (int i = 0; i < 5; ++i)
-    {
-        auto* b = new juce::TextButton(names[i]);
-        waveBtns.emplace_back(b);
-        parent->addAndMakeVisible(b);
-        b->setBounds(x + i * (bw + 2), y, bw, 24);
-        b->setLookAndFeel(&lnf);
-        b->setClickingTogglesState(true);
-        b->setRadioGroupId(param.hashCode() + 99);
-        b->onClick = [&, i, param] {
-            if (auto* par = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(param)))
-            {
-                par->beginChangeGesture();
-                par->setValueNotifyingHost(par->convertTo0to1((float)i));
-                par->endChangeGesture();
-            }
-        };
-        if (auto* par = proc.apvts.getParameter(param))
-        {
-            int cur = (int)std::round(par->getValue() * 4.0f);
-            b->setToggleState(cur == i, juce::dontSendNotification);
-        }
-        waveBtnInfos.push_back({ b, param, i });
-    }
+    return addView<pastel::SegChoice>(parent, b, proc.apvts, param, labelsIn, std::move(icons));
 }
 
 void MonoContent::refreshPresetName()
@@ -725,34 +649,37 @@ void MonoContent::refreshPresetName()
 void MonoContent::paint(juce::Graphics& g)
 {
     g.fillAll(MonoColors::bg);
-    g.setColour(MonoColors::raised);
-    g.fillRect(0, 0, getWidth(), 56);
-    g.setColour(MonoColors::blue);
-    g.fillRect(0, 56, getWidth(), 2);
+    // the Pastel family mark: four rounded squares (the only colour on the panel)
+    const juce::uint32 cols[4] = { 0xffe88a8a, 0xff8fd0c2, 0xffe9a3b8, 0xffa9d58e };
+    for (int i = 0; i < 4; ++i)
+    {
+        g.setColour(juce::Colour(cols[i]));
+        g.fillRoundedRectangle(18.0f + (float)(i % 2) * 10.0f, 17.0f + (float)(i / 2) * 10.0f, 8.0f, 8.0f, 2.0f);
+    }
     g.setColour(MonoColors::text);
-    g.setFont(lnf.logoFont(26.0f));
-    g.drawText("MONOSYNTH", 16, 12, 260, 32, juce::Justification::centredLeft, false); // centred in the 56px bar
+    g.setFont(lnf.logoFont(20.0f));
+    g.drawText("MONOSYNTH", 44, 12, 200, 28, juce::Justification::centredLeft, false);
+    g.setColour(MonoColors::border);
+    g.fillRect(8, 52, getWidth() - 16, 1);
 }
 
 void MonoContent::resized()
 {
     if (getWidth() <= 0) return;
-    // preset bar centred on the window: < [name] >  SAVE INIT
-    const int barW = 32 + 4 + 330 + 4 + 32 + 10 + 60 + 4 + 52;
-    int x = (baseW - barW) / 2;
-    prevBtn.setBounds(x, 14, 32, 28);          x += 36;
-    nameBtn.setBounds(x, 14, 330, 28);         x += 334;
-    nextBtn.setBounds(x, 14, 32, 28);          x += 42;
-    saveBtn.setBounds(x, 14, 60, 28);          x += 64;
-    initBtn.setBounds(x, 14, 52, 28);
-    panicBtn.setBounds(getWidth() - 56 - 70, 14, 60, 28);
-    undoBtn.setBounds(196, 14, 50, 28);
-    redoBtn.setBounds(250, 14, 50, 28);
-    x += 62;
-    randBtn.setBounds(x, 14, 56, 28);          x += 60;
-    mutateBtn.setBounds(x, 14, 66, 28);        x += 70;
-    locksBtn.setBounds(x, 14, 58, 28);
-    if (volTop != nullptr) volTop->setBounds(getWidth() - 56, 8, 40, 40);
+    undoBtn.setBounds(196, 12, 28, 28);
+    redoBtn.setBounds(228, 12, 28, 28);
+    // preset strip centred: < [name] >
+    int x = (baseW - (28 + 4 + 300 + 4 + 28)) / 2;
+    prevBtn.setBounds(x, 12, 28, 28);   x += 32;
+    nameBtn.setBounds(x, 12, 300, 28);  x += 304;
+    nextBtn.setBounds(x, 12, 28, 28);
+    int r = baseW - 8;
+    for (auto* b : { &panicBtn, &initBtn, &locksBtn, &mutateBtn, &randBtn, &saveBtn })
+    {
+        const int w = b == &panicBtn ? 62 : (b == &randBtn || b == &mutateBtn ? 68 : 54);
+        b->setBounds(r - w, 12, w, 28);
+        r -= w + 4;
+    }
     if (browser != nullptr)
         browser->setBounds(0, 0, baseW, baseH);
 }

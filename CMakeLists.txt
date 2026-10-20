@@ -47,6 +47,7 @@ juce_generate_juce_header(Monosynth)
 target_sources(Monosynth PRIVATE
   Source/PluginProcessor.cpp
   Source/PluginEditor.cpp
+  Source/PastelViews.cpp
   Source/PresetBrowser.cpp
   Source/Presets.cpp
   Source/PresetFiles.cpp
@@ -73,6 +74,7 @@ target_sources(MonoHarness PRIVATE
   Test/Harness.cpp
   Source/PluginProcessor.cpp
   Source/PluginEditor.cpp
+  Source/PastelViews.cpp
   Source/PresetBrowser.cpp
   Source/Presets.cpp
   Source/PresetFiles.cpp
